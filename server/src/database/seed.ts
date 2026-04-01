@@ -1,7 +1,7 @@
 import { getDatabase } from './connection';
 
 /**
- * 从 IG API 同步外汇对到数据库
+ * Sync forex pairs from IG API to database
  * IG has been removed - this function now uses default forex pairs
  */
 async function syncForexPairsFromIG(): Promise<void> {
@@ -11,14 +11,14 @@ async function syncForexPairsFromIG(): Promise<void> {
 }
 
 /**
- * 主种子函数
+ * Main seed function
  */
 export function seedData(): void {
   const db = getDatabase();
 
-  console.log('🌱 开始初始化数据库...');
+  console.log('🌱 Starting database initialization...');
 
-  // 插入默认配置
+  // Insert default settings
   const insertSetting = db.prepare(`
     INSERT OR REPLACE INTO settings (key, value, updated_at)
     VALUES (?, ?, CURRENT_TIMESTAMP)
@@ -39,38 +39,38 @@ export function seedData(): void {
     insertSetting.run(key, value);
   }
 
-  console.log('✅ 默认配置已插入');
+  console.log('✅ Default settings inserted');
 
-  // 使用默认外汇对列表
-  console.log('⚠️ 使用默认外汇对列表...');
+  // Using default forex pair list
+  console.log('⚠️ Using default forex pair list...');
   seedDefaultForexPairs();
 }
 
 /**
- * 种入默认外汇对列表（备用方案）
+ * Seed default forex pairs (fallback)
  */
 function seedDefaultForexPairs(): void {
   const db = getDatabase();
 
   const defaultPairs = [
-    // 主要货币对
+    // Major currency pairs
     'EUR/USD', 'GBP/USD', 'USD/JPY', 'USD/CHF',
     'AUD/USD', 'USD/CAD', 'NZD/USD',
 
-    // EUR 交叉
+    // EUR Crosses
     'EUR/GBP', 'EUR/JPY', 'EUR/CHF', 'EUR/AUD', 'EUR/CAD', 'EUR/NZD',
 
-    // GBP 交叉
+    // GBP Crosses
     'GBP/JPY', 'GBP/CHF', 'GBP/AUD', 'GBP/CAD', 'GBP/NZD',
 
-    // AUD 交叉
+    // AUD Crosses
     'AUD/JPY', 'AUD/CAD', 'AUD/CHF', 'AUD/NZD',
 
-    // CAD, CHF, NZD 交叉
+    // CAD, CHF, NZD Crosses
     'CAD/JPY', 'CHF/JPY', 'NZD/JPY', 'NZD/CAD', 'NZD/CHF',
   ];
 
-  // 收集配对
+  // Collect pairs
   const pairsToInsert: Array<[string, string, string, number]> = [];
   const pairSet = new Set<string>();
 
@@ -79,7 +79,7 @@ function seedDefaultForexPairs(): void {
       const [base1] = defaultPairs[i].split('/');
       const [base2] = defaultPairs[j].split('/');
 
-      // 同一基础货币的配对
+      // Pair with same base currency
       if (base1 === base2) {
         const key = `${defaultPairs[i]}-${defaultPairs[j]}`;
         if (!pairSet.has(key)) {
@@ -90,7 +90,7 @@ function seedDefaultForexPairs(): void {
     }
   }
 
-  // 批量插入
+  // Batch insert
   const insertPair = db.prepare(`
     INSERT OR IGNORE INTO stock_pairs (stock_a, stock_b, strategy_type, is_active)
     VALUES (?, ?, ?, ?)
@@ -105,7 +105,7 @@ function seedDefaultForexPairs(): void {
   insertMany(pairsToInsert);
 
   const count = db.prepare('SELECT COUNT(*) as count FROM stock_pairs').get() as { count: number };
-  console.log(`✅ 已插入 ${count.count} 个默认外汇对配对`);
+  console.log(`✅ Inserted ${count.count} default forex pair combinations`);
 }
 
 if (require.main === module) {
