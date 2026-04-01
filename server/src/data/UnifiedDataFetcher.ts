@@ -266,7 +266,8 @@ export class UnifiedDataFetcher {
   private async fetchHistoricalData(symbol: string): Promise<void> {
     try {
       if (this.source === 'yahoo') {
-        const historical = await this.yahooClient.getHistoricalData(symbol, '1d', '1m');
+        // Use a wider period to ensure enough warm-up bars are available immediately after startup.
+        const historical = await this.yahooClient.getHistoricalData(symbol, '5d', '1m');
 
         // Filter out invalid data (zero or null prices)
         const validHistorical = historical.filter(h => h.close > 0 && Number.isFinite(h.close));

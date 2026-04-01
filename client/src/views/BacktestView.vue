@@ -24,12 +24,14 @@ const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0];
 startDate.value = yesterday || '';
 endDate.value = today || '';
 
-const runBacktest = async () => {
+const runBacktest = async (resetPage: boolean = true) => {
   isLoading.value = true;
   showError.value = false;
   backtestResult.value = null;
   showTriggeredOnly.value = true; // Reset filter to show triggered only
-  page.value = 1;
+  if (resetPage) {
+    page.value = 1;
+  }
 
   try {
     const startDatetime = `${startDate.value}T${startTime.value}:00`;
@@ -108,13 +110,13 @@ const nextPage = async () => {
   if (!backtestResult.value?.pagination) return;
   if (page.value >= backtestResult.value.pagination.totalPages) return;
   page.value += 1;
-  await runBacktest();
+  await runBacktest(false);
 };
 
 const prevPage = async () => {
   if (page.value <= 1) return;
   page.value -= 1;
-  await runBacktest();
+  await runBacktest(false);
 };
 
 interface BacktestResult {
@@ -196,7 +198,7 @@ interface BacktestResult {
       </div>
 
       <div class="form-actions">
-        <button class="run-btn" @click="runBacktest" :disabled="isLoading">
+        <button class="run-btn" @click="runBacktest()" :disabled="isLoading">
           <span class="btn-icon">{{ isLoading ? '⏳' : '▶' }}</span>
           <span class="btn-text">{{ isLoading ? 'Running...' : 'Run Backtest' }}</span>
         </button>
