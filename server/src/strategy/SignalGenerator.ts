@@ -94,9 +94,9 @@ export class SignalGenerator {
       stockB,
       returnsA,
       returnsB,
-      latestA.volume,
+      currentVolumeA,
       avgVolumeA,
-      latestB.volume,
+      currentVolumeB,
       avgVolumeB
     );
 
