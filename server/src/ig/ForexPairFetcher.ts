@@ -1,26 +1,26 @@
 import IGClient from './IGClient';
 
 /**
- * 外汇对数据结构
+ * Forex pair data structure
  */
 export interface ForexPair {
-  epic: string;           // IG 市场的唯一标识符，如 CS.D.EURUSD.CFD.IP
-  pairName: string;       // 标准化名称，如 EUR/USD
-  instrumentName: string; // IG 返回的完整名称
+  epic: string;           // Unique IG market identifier, e.g. CS.D.EURUSD.CFD.IP
+  pairName: string;       // Normalized name, e.g. EUR/USD
+  instrumentName: string; // Full name returned by IG
   instrumentType: string; // CURRENCIES
-  marketStatus: string;   // TRADEABLE, CLOSED 等
+  marketStatus: string;   // TRADEABLE, CLOSED etc.
 }
 
 /**
- * 外汇对检索服务
+ * Forex pair retrieval service
  *
- * 使用关键词矩阵搜索 IG 市场，获取所有可用的外汇交易对
- * 参考：testjs/testall.js
+ * Use keyword matrix to search IG markets and fetch available forex pairs
+ * Reference: testjs/testall.js
  */
 export class ForexPairFetcher {
   private igClient: IGClient;
 
-  // 核心货币关键字矩阵
+  // Core currency keyword matrix
   private searchKeywords = [
     'USD', 'EUR', 'GBP', 'JPY',
     'AUD', 'CAD', 'CHF', 'NZD'
@@ -31,14 +31,14 @@ export class ForexPairFetcher {
   }
 
   /**
-   * 检索所有可用的外汇交易对
+   * Fetch all available forex pairs
    *
-   * @returns 去重后的外汇对列表
+   * @returns De-duplicated forex pair list
    */
   async searchAllForexPairs(): Promise<ForexPair[]> {
-    console.log('🔍 开始从 IG API 检索外汇交易对...');
+    console.log('🔍 Starting forex pair retrieval from IG API...');
 
-    // 确保已认证
+    // Ensure authenticated
     if (!this.igClient.isConnected) {
       await this.igClient.authenticate();
     }
@@ -46,20 +46,20 @@ export class ForexPairFetcher {
     const allPairs: ForexPair[] = [];
     const epicSet = new Set<string>();
 
-    // 逐个关键字搜索
+    // Search keyword by keyword
     for (const keyword of this.searchKeywords) {
-      console.log(`  正在搜索包含 "${keyword}" 的交易品种...`);
+      console.log(`  Searching instruments containing "${keyword}" ...`);
 
       try {
         const markets = await this.searchMarkets(keyword);
 
         let addedCount = 0;
         for (const market of markets) {
-          // 只保留外汇类型且可交易的品种
+          // Keep only tradeable forex instruments
           if (market.instrumentType === 'CURRENCIES' &&
               market.marketStatus === 'TRADEABLE') {
 
-            // 去重：检查 epic 是否已存在
+            // De-duplicate: check whether epic already exists
             if (!epicSet.has(market.epic)) {
               epicSet.add(market.epic);
 
@@ -72,45 +72,45 @@ export class ForexPairFetcher {
           }
         }
 
-        console.log(`    └─ 新增了 ${addedCount} 个交易对`);
+        console.log(`    └─ Added  ${addedCount}  pairs`);
 
       } catch (error) {
-        console.error(`    ❌ 搜索 ${keyword} 时失败:`, error);
+        console.error(`    ❌ Search ${keyword}  failed:`, error);
       }
 
-      // 每次请求后延时 1 秒，防止触发 API 速率限制
+      // Delay 1 second between requests to avoid API rate limiting
       await this.sleep(1000);
     }
 
-    console.log(`\n✅ 检索完成！共计获取到 ${allPairs.length} 个去重后的活跃外汇交易对`);
+    console.log(`\n✅ Retrieval complete! total active de-duplicated forex pairs:  ${allPairs.length} `);
     return allPairs;
   }
 
   /**
-   * 搜索市场
+   * Search markets
    */
   private async searchMarkets(keyword: string): Promise<any[]> {
     return await this.igClient.searchMarkets(keyword);
   }
 
   /**
-   * 标准化外汇对数据
+   * Normalize forex pair data
    *
-   * 将 IG 返回的市场数据转换为标准的 ForexPair 格式
+   * Convert IG market data to standard ForexPair format
    */
   private normalizePair(market: any): ForexPair | null {
     const instrumentName = market.instrumentName || '';
 
-    // 跳过非标准合约（迷你合约、特殊合约等）
-    // 优先选择 CFD 合约
+    // Skip non-standard contracts (mini/special etc.)
+    // Prefer CFD contracts
     if (!market.epic.includes('.CFD.IP')) {
-      // 如果没有 CFD 合约，也可以接受其他标准合约
-      // 这里根据需求调整
+      // If no CFD contract exists, accept other standard contracts
+      // Adjust according to requirements
     }
 
-    // 从 instrumentName 提取货币对名称
-    // 例如："欧元/美元" -> "EUR/USD"
-    // 或者："EUR/USD" -> "EUR/USD"
+    // Extract pair name from instrumentName
+    // Example: "Euro/US Dollar" -> "EUR/USD"
+    // Or:"EUR/USD" -> "EUR/USD"
     const pairName = this.extractPairName(instrumentName);
 
     if (!pairName) {
@@ -127,46 +127,46 @@ export class ForexPairFetcher {
   }
 
   /**
-   * 从 instrumentName 提取标准化的货币对名称
+   * Extract normalized pair name from instrumentName
    *
-   * 支持中文和英文名称解析
+   * Support Chinese and English name parsing
    */
   private extractPairName(instrumentName: string): string | null {
-    // 货币代码映射（中文 -> 英文）
+    // Currency code mapping (Chinese -> English)
     const currencyMap: Record<string, string> = {
-      '欧元': 'EUR',
-      '美元': 'USD',
-      '英镑': 'GBP',
-      '日元': 'JPY',
-      '澳元': 'AUD',
-      '加元': 'CAD',
-      '瑞士法郎': 'CHF',
-      '新西兰元': 'NZD',
-      '人民币': 'CNH',
-      '港元': 'HKD',
-      '新加坡元': 'SGD',
-      '挪威克朗': 'NOK',
-      '瑞典克朗': 'SEK',
-      '丹麦克郎': 'DKK',
-      '波兰兹罗提': 'PLN',
-      '捷克克郎': 'CZK',
-      '匈牙利福林': 'HUF',
-      '土耳其里拉': 'TRY',
-      '墨西哥比索': 'MXN',
-      '南非兰特': 'ZAR',
-      '印度卢比': 'INR',
-      '韩圜': 'KRW',
-      '菲律宾比索': 'PHP',
-      '新台币': 'TWD',
+      'Euro': 'EUR',
+      'US Dollar': 'USD',
+      'British Pound': 'GBP',
+      'Japanese Yen': 'JPY',
+      'Australian Dollar': 'AUD',
+      'Canadian Dollar': 'CAD',
+      'Swiss Franc': 'CHF',
+      'New Zealand Dollar': 'NZD',
+      'Chinese Yuan': 'CNH',
+      'Hong Kong Dollar': 'HKD',
+      'Singapore Dollar': 'SGD',
+      'Norwegian Krone': 'NOK',
+      'Swedish Krona': 'SEK',
+      'Danish Krone': 'DKK',
+      'Polish Zloty': 'PLN',
+      'Czech Koruna': 'CZK',
+      'Hungarian Forint': 'HUF',
+      'Turkish Lira': 'TRY',
+      'Mexican Peso': 'MXN',
+      'South African Rand': 'ZAR',
+      'Indian Rupee': 'INR',
+      'Korean Won': 'KRW',
+      'Philippine Peso': 'PHP',
+      'New Taiwan Dollar': 'TWD',
     };
 
-    // 尝试匹配中文名称（如 "欧元/美元"）
+    // Try matching Chinese names (e.g. Euro/USD)
     for (const [cnName, enCode] of Object.entries(currencyMap)) {
       if (instrumentName.includes(cnName)) {
-        // 查找配对的另一个货币
+        // Find paired second currency
         for (const [cnName2, enCode2] of Object.entries(currencyMap)) {
           if (cnName !== cnName2 && instrumentName.includes(cnName2)) {
-            // 确定顺序：查找哪个货币在前
+            // Determine order: which currency appears first
             const index1 = instrumentName.indexOf(cnName);
             const index2 = instrumentName.indexOf(cnName2);
 
@@ -180,33 +180,33 @@ export class ForexPairFetcher {
       }
     }
 
-    // 尝试匹配英文名称（如 "EUR/USD"）
+    // Try matching English names (e.g. EUR/USD)
     const forexPattern = /([A-Z]{3})\/([A-Z]{3})/;
     const match = instrumentName.match(forexPattern);
     if (match) {
       return `${match[1]}/${match[2]}`;
     }
 
-    // 如果没有匹配到，返回原始名称作为 pairName
+    // If no match, return original name as pairName
     return instrumentName.split(' ')[0];
   }
 
   /**
-   * 延时函数
+   * Sleep helper
    */
   private sleep(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
   }
 
   /**
-   * 获取所有搜索关键字
+   * Get all search keywords
    */
   getKeywords(): string[] {
     return [...this.searchKeywords];
   }
 
   /**
-   * 添加搜索关键字
+   * Add search keyword
    */
   addKeyword(keyword: string): void {
     const upperKeyword = keyword.toUpperCase().trim();

@@ -42,6 +42,7 @@ export class UnifiedDataFetcher {
   private priceHistory: Map<string, StockData[]> = new Map();
   private isRunning: boolean = false;
   private intervalId: NodeJS.Timeout | null = null;
+  private readonly lookbackPoints: number;
 
   // Per-symbol random state for independent randomness
   private symbolRandomStates: Map<string, number> = new Map();
@@ -49,6 +50,10 @@ export class UnifiedDataFetcher {
   constructor(source: DataSource = 'yahoo') {
     this.source = source;
     this.yahooClient = new YahooFinanceClient();
+    this.lookbackPoints = Math.max(
+      2,
+      Math.floor((config.trading.lookbackWindow * 60) / config.trading.samplingInterval)
+    );
 
     console.log(`📊 Data Fetcher initialized with source: ${source}`);
   }
@@ -261,6 +266,7 @@ export class UnifiedDataFetcher {
   private async fetchHistoricalData(symbol: string): Promise<void> {
     try {
       if (this.source === 'yahoo') {
+        // Use a wider period to ensure enough warm-up bars are available immediately after startup.
         const historical = await this.yahooClient.getHistoricalData(symbol, '5d', '1m');
 
         // Filter out invalid data (zero or null prices)
@@ -276,14 +282,15 @@ export class UnifiedDataFetcher {
           source: 'yahoo',
         }));
 
-        this.priceHistory.set(symbol, stockData);
+        // Keep only enough points required by strategy window (+1 for return calculation)
+        this.priceHistory.set(symbol, stockData.slice(-(this.lookbackPoints + 1)));
 
         // Save to database
-        for (const data of stockData) {
+        for (const data of stockData.slice(-(this.lookbackPoints + 1))) {
           this.saveToDatabase(data);
         }
 
-        console.log(`📊 Loaded ${stockData.length} historical prices for ${symbol}`);
+        console.log(`📊 Loaded ${Math.min(stockData.length, this.lookbackPoints + 1)} historical prices for ${symbol}`);
       }
     } catch (error) {
       console.error(`Failed to fetch historical data for ${symbol}:`, error);
@@ -297,8 +304,8 @@ export class UnifiedDataFetcher {
     const history = this.priceHistory.get(symbol) || [];
     history.push(data);
 
-    // Keep only last 60 data points (30 minutes @ 30s)
-    while (history.length > 60) {
+    // Keep only strategy lookback window (+1 for return generation)
+    while (history.length > this.lookbackPoints + 1) {
       history.shift();
     }
 

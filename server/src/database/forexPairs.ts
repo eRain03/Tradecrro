@@ -1,23 +1,23 @@
 import { getDatabase } from './connection';
 
 /**
- * 外汇对数据库管理模块
+ * Forex pair database module
  *
- * 管理外汇交易对的存储、检索和更新
- * 使用现有的 stock_pairs 表存储外汇对数据
+ * Manage storage, retrieval, and updates of forex pairs
+ * Store forex pair data in the existing stock_pairs table
  */
 
 export interface ForexPairRecord {
   id: number;
-  epic: string;           // IG 市场的唯一标识符
-  pairName: string;       // 标准化名称，如 EUR/USD
-  instrumentName: string; // IG 返回的完整名称
-  is_active: number;      // 是否激活 (1=是，0=否)
+  epic: string;           // Unique IG market identifier
+  pairName: string;       // Normalized name, e.g. EUR/USD
+  instrumentName: string; // Full name returned by IG
+  is_active: number;      // Active flag (1=yes, 0=no)
   created_at: string;
 }
 
 /**
- * 从 IG 检索到的原始外汇对数据
+ * Raw forex pair data retrieved from IG
  */
 export interface RawForexPair {
   epic: string;
@@ -28,31 +28,31 @@ export interface RawForexPair {
 }
 
 /**
- * 将外汇对存入数据库
- * 使用 stock_pairs 表，其中：
- * - stock_a = pairName (如 "EUR/USD")
- * - stock_b = 配对的另一个货币对（用于相关性交易）
- * - strategy_type = 'correlation' (默认)
+ * Persist forex pairs into database
+ * Using stock_pairs table, where:
+ * - stock_a = pairName (e.g. "EUR/USD")
+ * - stock_b = Paired symbol for correlation strategy
+ * - strategy_type = 'correlation' (default)
  */
 
 /**
- * 同步外汇对到数据库
+ * Sync forex pairs to database
  *
- * @param pairs 从 IG 检索到的外汇对列表
- * @returns 存入数据库的外汇对数量
+ * @param pairs Forex pairs retrieved from IG
+ * @returns Number of forex pairs written to DB
  */
 export function syncForexPairs(pairs: RawForexPair[]): number {
   const db = getDatabase();
 
-  console.log('💾 开始同步外汇对到数据库...');
+  console.log('💾 Starting forex pair sync to database...');
 
-  // 准备插入语句
+  // Prepare insert statement
   const insertPair = db.prepare(`
     INSERT OR IGNORE INTO stock_pairs (stock_a, stock_b, strategy_type, is_active)
     VALUES (?, ?, ?, 1)
   `);
 
-  // 准备更新语句（如果 epic 已存在，更新状态）
+  // Prepare update statement (update status if epic exists)
   const updatePair = db.prepare(`
     UPDATE stock_pairs SET is_active = 1 WHERE stock_a = ?
   `);
@@ -62,30 +62,30 @@ export function syncForexPairs(pairs: RawForexPair[]): number {
 
   for (const pair of pairs) {
     try {
-      // 首先尝试插入新记录
+      // First try inserting a new record
       const result = insertPair.run(pair.pairName, pair.pairName, 'correlation');
 
       if (result.changes === 0) {
-        // 如果插入失败（已存在），更新状态
+        // If insert fails (already exists), update status
         updatePair.run(pair.pairName);
         updatedCount++;
       } else {
         insertedCount++;
       }
     } catch (error) {
-      console.error(`  ❌ 插入失败 ${pair.pairName}:`, error);
+      console.error(`  ❌ Insert failed ${pair.pairName}:`, error);
     }
   }
 
-  console.log(`✅ 同步完成！新增 ${insertedCount} 个，更新 ${updatedCount} 个外汇对`);
+  console.log(`✅ Sync completed! inserted ${insertedCount}  updated  ${updatedCount}  forex pairs`);
 
   return insertedCount + updatedCount;
 }
 
 /**
- * 从数据库获取所有活跃的外汇对
+ * Get all active forex pairs from database
  *
- * @returns 外汇对列表
+ * @returns Forex pair list
  */
 export function getActiveForexPairs(): string[] {
   const db = getDatabase();
@@ -94,7 +94,7 @@ export function getActiveForexPairs(): string[] {
     SELECT DISTINCT stock_a as pair_name
     FROM stock_pairs
     WHERE is_active = 1
-    AND stock_a LIKE '%/%'  -- 只返回包含 / 的，即外汇对格式
+    AND stock_a LIKE '%/%'  -- Return only rows containing / (forex format)
     ORDER BY stock_a
   `).all() as { pair_name: string }[];
 
@@ -102,9 +102,9 @@ export function getActiveForexPairs(): string[] {
 }
 
 /**
- * 获取所有外汇对（包括非活跃）
+ * Get all forex pairs (including inactive)
  *
- * @returns 外汇对列表（包含详细信息）
+ * @returns Forex pair list (with details)
  */
 export function getAllForexPairs(): ForexPairRecord[] {
   const db = getDatabase();
@@ -120,10 +120,10 @@ export function getAllForexPairs(): ForexPairRecord[] {
 }
 
 /**
- * 激活或停用外汇对
+ * Activate or deactivate forex pair
  *
- * @param pairName 外汇对名称（如 EUR/USD）
- * @param isActive 是否激活
+ * @param pairName Forex pair name (e.g. EUR/USD)
+ * @param isActive Whether active
  */
 export function setForexPairActive(pairName: string, isActive: boolean): void {
   const db = getDatabase();
@@ -136,9 +136,9 @@ export function setForexPairActive(pairName: string, isActive: boolean): void {
 }
 
 /**
- * 删除外汇对
+ * Delete forex pair
  *
- * @param pairName 外汇对名称
+ * @param pairName Forex pair name
  */
 export function deleteForexPair(pairName: string): void {
   const db = getDatabase();
@@ -150,7 +150,7 @@ export function deleteForexPair(pairName: string): void {
 }
 
 /**
- * 获取外汇对数量统计
+ * Get forex pair count statistics
  */
 export function getForexPairsStats(): { total: number; active: number; inactive: number } {
   const db = getDatabase();

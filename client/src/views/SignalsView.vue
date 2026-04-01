@@ -39,11 +39,11 @@ const filteredSignals = computed(() => {
 // Get correlation type label
 const getCorrelationType = (signal: any) => {
   if (signal.strategyType === 'positive_lag') {
-    return { label: '正相关 (滞后)', class: 'type-lag' };
+    return { label: 'Positive (Lag)', class: 'type-lag' };
   } else if (signal.strategyType === 'negative_corr') {
-    return { label: '负相关 (同步)', class: 'type-neg' };
+    return { label: 'Negative (Sync)', class: 'type-neg' };
   }
-  return { label: '未知', class: '' };
+  return { label: 'Unknown', class: '' };
 };
 
 // Get leader/lagger info
@@ -51,7 +51,7 @@ const getLeadLagInfo = (signal: any) => {
   if (signal.strategyType === 'positive_lag') {
     return `${signal.score?.leader || 'N/A'} → ${signal.score?.lagger || 'N/A'}`;
   } else if (signal.strategyType === 'negative_corr') {
-    return '同步联动';
+    return 'Synchronous';
   }
   return 'N/A';
 };
@@ -93,15 +93,15 @@ const closeModal = () => {
 
 const getEntryLogicText = (signal: any) => {
   if (!signal.entryConfirmed) {
-    return signal.entryReason || '入场条件未满足';
+    return signal.entryReason || 'Entry conditions not met';
   }
 
   if (signal.strategyType === 'positive_lag') {
-    return `Leader 上涨 ${(signal.leaderMove! * 100).toFixed(2)}% (≥5%), Lagger 上涨 ${(signal.laggerMove! * 100).toFixed(2)}% (<2%), 预期波动 ${(signal.expectedMove! * 100).toFixed(2)}% (≥5%)`;
+    return `Leader up ${(signal.leaderMove! * 100).toFixed(2)}% (≥5%), Lagger up ${(signal.laggerMove! * 100).toFixed(2)}% (<2%), Expected move ${(signal.expectedMove! * 100).toFixed(2)}% (≥5%)`;
   } else if (signal.strategyType === 'negative_corr') {
-    return `强负相关 + 高成交量确认 + 预期波动 ${(signal.expectedMove! * 100).toFixed(2)}% (≥5%)`;
+    return `Strong negative correlation + high-volume confirmation + expected move ${(signal.expectedMove! * 100).toFixed(2)}% (≥5%)`;
   }
-  return signal.entryReason || '条件已满足';
+  return signal.entryReason || 'Conditions met';
 };
 </script>
 
@@ -148,14 +148,14 @@ const getEntryLogicText = (signal: any) => {
       <table>
         <thead>
           <tr>
-            <th>时间</th>
-            <th>交易对</th>
-            <th>相关性类型</th>
-            <th>相关性分数</th>
-            <th>成交量分数</th>
-            <th>总分</th>
-            <th>领先/滞后</th>
-            <th>状态</th>
+            <th>Time</th>
+            <th>Pair</th>
+            <th>Correlation Type</th>
+            <th>Correlation Score</th>
+            <th>Volume Score</th>
+            <th>Total Score</th>
+            <th>Leader/Lagger</th>
+            <th>Status</th>
           </tr>
         </thead>
         <tbody>
@@ -199,7 +199,7 @@ const getEntryLogicText = (signal: any) => {
             <td class="leadlag-cell">{{ getLeadLagInfo(signal) }}</td>
             <td>
               <span class="status-badge" :class="{ 'triggered': signal.triggered }">
-                {{ signal.triggered ? '可交易' : '观察中' }}
+                {{ signal.triggered ? 'Tradable' : 'Watching' }}
               </span>
             </td>
           </tr>
@@ -218,100 +218,100 @@ const getEntryLogicText = (signal: any) => {
     <div v-if="showModal" class="modal-overlay" @click="closeModal">
       <div class="modal-content" @click.stop>
         <div class="modal-header">
-          <h2>信号详情</h2>
+          <h2>Signal Details</h2>
           <button class="modal-close" @click="closeModal">×</button>
         </div>
         <div class="modal-body" v-if="selectedSignal">
           <div class="detail-section">
-            <h3>📊 交易对信息</h3>
+            <h3>📊 Pair Information</h3>
             <div class="detail-row">
-              <span class="detail-label">交易对:</span>
+              <span class="detail-label">Pair:</span>
               <span class="detail-value">{{ selectedSignal.stockA }} / {{ selectedSignal.stockB }}</span>
             </div>
             <div class="detail-row">
-              <span class="detail-label">时间:</span>
+              <span class="detail-label">Time:</span>
               <span class="detail-value">{{ formatTime(selectedSignal.timestamp) }}</span>
             </div>
             <div class="detail-row">
-              <span class="detail-label">相关性类型:</span>
+              <span class="detail-label">Correlation Type:</span>
               <span class="detail-value strategy-value">{{ getCorrelationType(selectedSignal).label }}</span>
             </div>
             <div v-if="selectedSignal.strategyType === 'positive_lag'" class="detail-row">
-              <span class="detail-label">领先 → 滞后:</span>
+              <span class="detail-label">Leader → Lagger:</span>
               <span class="detail-value">{{ selectedSignal.score?.leader }} → {{ selectedSignal.score?.lagger }}</span>
             </div>
           </div>
 
           <div class="detail-section">
-            <h3>📈 分数明细</h3>
+            <h3>📈 Score Breakdown</h3>
             <div class="score-breakdown-grid">
               <div class="score-item">
-                <span class="score-item-label">相关性分数</span>
+                <span class="score-item-label">Correlation Score</span>
                 <span class="score-item-value">{{ getCorrelationScore(selectedSignal) }} / 80</span>
-                <span class="score-item-desc">反映两个股票价格波动的相关性强弱</span>
+                <span class="score-item-desc">Strength of co-movement between the two symbols</span>
               </div>
               <div class="score-item">
-                <span class="score-item-label">成交量分数 A</span>
+                <span class="score-item-label">Volume Score A</span>
                 <span class="score-item-value">{{ Math.round(selectedSignal.score?.volumeScoreA || 0) }} / 10</span>
-                <span class="score-item-desc">股票 A 当前成交量相对于平均水平的倍数</span>
+                <span class="score-item-desc">Current volume multiplier vs average for Symbol A</span>
               </div>
               <div class="score-item">
-                <span class="score-item-label">成交量分数 B</span>
+                <span class="score-item-label">Volume Score B</span>
                 <span class="score-item-value">{{ Math.round(selectedSignal.score?.volumeScoreB || 0) }} / 10</span>
-                <span class="score-item-desc">股票 B 当前成交量相对于平均水平的倍数</span>
+                <span class="score-item-desc">Current volume multiplier vs average for Symbol B</span>
               </div>
               <div class="score-item total">
-                <span class="score-item-label">总分</span>
+                <span class="score-item-label">Total Score</span>
                 <span class="score-item-value total-value" :class="getScoreClass(getTotalScore(selectedSignal), 100)">
                   {{ getTotalScore(selectedSignal) }} / 100
                 </span>
-                <span class="score-item-desc">≥87 分才触发交易信号</span>
+                <span class="score-item-desc">Trading signal requires score ≥ 87</span>
               </div>
             </div>
             <div class="score-details">
               <div class="detail-row">
-                <span class="detail-label">同步相关系数:</span>
+                <span class="detail-label">Sync Correlation:</span>
                 <span class="detail-value">{{ (selectedSignal.score?.syncCorrelation || 0).toFixed(3) }}</span>
-                <span class="detail-hint">负相关策略看这个</span>
+                <span class="detail-hint">Used for negative-correlation strategy</span>
               </div>
               <div class="detail-row">
-                <span class="detail-label">滞后相关系数:</span>
+                <span class="detail-label">Lag Correlation:</span>
                 <span class="detail-value">{{ (selectedSignal.score?.lagCorrelation || 0).toFixed(3) }}</span>
-                <span class="detail-hint">正相关策略看这个</span>
+                <span class="detail-hint">Used for positive-lag strategy</span>
               </div>
               <div class="detail-row">
-                <span class="detail-label">成交量比率 A:</span>
+                <span class="detail-label">Volume Ratio A:</span>
                 <span class="detail-value">{{ (selectedSignal.score?.volumeRatioA || 1).toFixed(2) }}x</span>
               </div>
               <div class="detail-row">
-                <span class="detail-label">成交量比率 B:</span>
+                <span class="detail-label">Volume Ratio B:</span>
                 <span class="detail-value">{{ (selectedSignal.score?.volumeRatioB || 1).toFixed(2) }}x</span>
               </div>
             </div>
           </div>
 
           <div class="detail-section entry-logic">
-            <h3>🎯 入场逻辑</h3>
+            <h3>🎯 Entry Logic</h3>
             <div class="detail-row">
-              <span class="detail-label">入场确认:</span>
+              <span class="detail-label">Entry Confirmed:</span>
               <span class="detail-value" :class="{ 'confirmed': selectedSignal.entryConfirmed, 'not-confirmed': !selectedSignal.entryConfirmed }">
-                {{ selectedSignal.entryConfirmed ? '已确认 ✓' : '未确认 ✗' }}
+                {{ selectedSignal.entryConfirmed ? 'Confirmed ✓' : 'Not Confirmed ✗' }}
               </span>
             </div>
             <div class="detail-row">
-              <span class="detail-label">原因:</span>
+              <span class="detail-label">Reason:</span>
               <span class="detail-value reason-text">{{ getEntryLogicText(selectedSignal) }}</span>
             </div>
             <div v-if="selectedSignal.leaderMove" class="detail-row">
-              <span class="detail-label">Leader 涨幅:</span>
+              <span class="detail-label">Leader Move:</span>
               <span class="detail-value">{{ (selectedSignal.leaderMove * 100).toFixed(2) }}%</span>
             </div>
             <div v-if="selectedSignal.laggerMove" class="detail-row">
-              <span class="detail-label">Lagger 涨幅:</span>
+              <span class="detail-label">Lagger Move:</span>
               <span class="detail-value">{{ (selectedSignal.laggerMove * 100).toFixed(2) }}%</span>
             </div>
             <div v-if="selectedSignal.expectedMove" class="detail-row">
-              <span class="detail-label">预期波动:</span>
+              <span class="detail-label">Expected move:</span>
               <span class="detail-value">{{ (selectedSignal.expectedMove * 100).toFixed(2) }}%</span>
             </div>
           </div>

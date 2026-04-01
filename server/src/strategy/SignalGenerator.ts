@@ -2,6 +2,8 @@ import ScoringEngine, { PairScore } from '../core/scoring/ScoringEngine';
 import UnifiedDataFetcher from '../data/UnifiedDataFetcher';
 import EntryChecker from './EntryChecker';
 import { getDatabase } from '../database/connection';
+import config from '../config';
+import ReturnCalculator from '../core/data/ReturnCalculator';
 
 export interface TradingSignal {
   id?: number;
@@ -25,11 +27,16 @@ export class SignalGenerator {
   private scoringEngine: ScoringEngine;
   private entryChecker: EntryChecker;
   private dataService: UnifiedDataFetcher;
+  private readonly lookbackPoints: number;
 
   constructor(dataService: UnifiedDataFetcher) {
     this.scoringEngine = new ScoringEngine();
     this.entryChecker = new EntryChecker();
     this.dataService = dataService;
+    this.lookbackPoints = Math.max(
+      2,
+      Math.floor((config.trading.lookbackWindow * 60) / config.trading.samplingInterval)
+    );
   }
 
   /**
@@ -50,7 +57,8 @@ export class SignalGenerator {
     const historyA = this.dataService.getPriceHistory(stockA);
     const historyB = this.dataService.getPriceHistory(stockB);
 
-    if (historyA.length < 10 || historyB.length < 10) {
+    // Need at least N+1 prices to produce N returns
+    if (historyA.length < this.lookbackPoints + 1 || historyB.length < this.lookbackPoints + 1) {
       return null; // Not enough data
     }
 
@@ -65,14 +73,39 @@ export class SignalGenerator {
     // Calculate returns
     const pricesA = historyA.map(h => h.price);
     const pricesB = historyB.map(h => h.price);
-    const returnsA = this.calculateReturns(pricesA);
-    const returnsB = this.calculateReturns(pricesB);
+    const returnsA = ReturnCalculator.getSlidingWindow(
+      ReturnCalculator.calculateReturns(pricesA),
+      this.lookbackPoints
+    );
+    const returnsB = ReturnCalculator.getSlidingWindow(
+      ReturnCalculator.calculateReturns(pricesB),
+      this.lookbackPoints
+    );
 
     // Calculate average volumes
-    const volumesA = historyA.map(h => h.volume);
-    const volumesB = historyB.map(h => h.volume);
-    const avgVolumeA = volumesA.reduce((a, b) => a + b, 0) / volumesA.length || 1;
-    const avgVolumeB = volumesB.reduce((a, b) => a + b, 0) / volumesB.length || 1;
+    const volumesA = historyA.slice(-this.lookbackPoints).map(h => h.volume);
+    const volumesB = historyB.slice(-this.lookbackPoints).map(h => h.volume);
+    let avgVolumeA = volumesA.reduce((a, b) => a + b, 0) / volumesA.length || 0;
+    let avgVolumeB = volumesB.reduce((a, b) => a + b, 0) / volumesB.length || 0;
+    let currentVolumeA = latestA.volume;
+    let currentVolumeB = latestB.volume;
+
+    // Yahoo forex symbols often have missing/zero volume.
+    // Fallback to return-activity proxy so ratio/score can still vary.
+    if (avgVolumeA <= 0 || currentVolumeA <= 0) {
+      const absReturnsA = returnsA.map(r => Math.abs(r));
+      const avgAbsA = absReturnsA.reduce((sum, v) => sum + v, 0) / absReturnsA.length || 0;
+      const currentAbsA = absReturnsA[absReturnsA.length - 1] || 0;
+      avgVolumeA = avgAbsA * 1_000_000;
+      currentVolumeA = currentAbsA * 1_000_000;
+    }
+    if (avgVolumeB <= 0 || currentVolumeB <= 0) {
+      const absReturnsB = returnsB.map(r => Math.abs(r));
+      const avgAbsB = absReturnsB.reduce((sum, v) => sum + v, 0) / absReturnsB.length || 0;
+      const currentAbsB = absReturnsB[absReturnsB.length - 1] || 0;
+      avgVolumeB = avgAbsB * 1_000_000;
+      currentVolumeB = currentAbsB * 1_000_000;
+    }
 
     // Calculate score
     const score = this.scoringEngine.calculatePairScore(
@@ -80,9 +113,9 @@ export class SignalGenerator {
       stockB,
       returnsA,
       returnsB,
-      latestA.volume,
+      currentVolumeA,
       avgVolumeA,
-      latestB.volume,
+      currentVolumeB,
       avgVolumeB
     );
 
@@ -201,14 +234,6 @@ export class SignalGenerator {
     `).all(limit);
 
     return rows.map(this.rowToSignal);
-  }
-
-  private calculateReturns(prices: number[]): number[] {
-    const returns: number[] = [];
-    for (let i = 1; i < prices.length; i++) {
-      returns.push((prices[i] - prices[i - 1]) / prices[i - 1]);
-    }
-    return returns;
   }
 
   private saveSignal(signal: TradingSignal): number {

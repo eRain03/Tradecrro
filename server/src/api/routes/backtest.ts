@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { getDatabase } from '../../database/connection';
+import SignalBacktester from '../../strategy/SignalBacktester';
 
 const router = Router();
 
@@ -7,6 +8,9 @@ interface BacktestRequest {
   startTime: string;
   endTime: string;
   pairs?: string[];
+  mode?: 'db_signals' | 'yahoo_replay';
+  page?: number;
+  pageSize?: number;
 }
 
 interface BacktestSignal {
@@ -44,13 +48,19 @@ interface BacktestResult {
     avgVolumeScore: number;
     avgTotalScore: number;
   };
+  pagination?: {
+    page: number;
+    pageSize: number;
+    totalRows: number;
+    totalPages: number;
+  };
   signals: BacktestSignal[];
 }
 
 // Run backtest - returns all signals within time range
 router.post('/run', (req, res) => {
   try {
-    const { startTime, endTime, pairs }: BacktestRequest = req.body;
+    const { startTime, endTime, pairs, page = 1, pageSize = 100 }: BacktestRequest = req.body;
 
     if (!startTime || !endTime) {
       return res.status(400).json({ error: 'Start time and end time are required' });
@@ -96,7 +106,13 @@ router.post('/run', (req, res) => {
       params.push(...pairs);
     }
 
-    signalQuery += ' ORDER BY s.timestamp DESC';
+    const safePage = Math.max(1, Number(page) || 1);
+    const safePageSize = Math.min(500, Math.max(10, Number(pageSize) || 100));
+    const offset = (safePage - 1) * safePageSize;
+    const countQuery = `SELECT COUNT(*) as total FROM (${signalQuery})`;
+    const totalRows = (db.prepare(countQuery).get(...params) as { total: number }).total;
+
+    signalQuery += ` ORDER BY s.timestamp DESC LIMIT ${safePageSize} OFFSET ${offset}`;
 
     const rows = db.prepare(signalQuery).all(...params) as any[];
 
@@ -153,6 +169,12 @@ router.post('/run', (req, res) => {
         avgVolumeScore,
         avgTotalScore,
       },
+      pagination: {
+        page: safePage,
+        pageSize: safePageSize,
+        totalRows,
+        totalPages: Math.ceil(totalRows / safePageSize),
+      },
       signals,
     };
 
@@ -160,6 +182,132 @@ router.post('/run', (req, res) => {
   } catch (error: any) {
     console.error('Backtest error:', error);
     res.status(500).json({ error: error.message || 'Backtest failed' });
+  }
+});
+
+// Replay backtest from Yahoo historical candles (signal-only, no trading execution)
+router.post('/replay', async (req, res) => {
+  try {
+    const { startTime, endTime, pairs, page = 1, pageSize = 100 }: BacktestRequest = req.body;
+
+    if (!startTime || !endTime) {
+      return res.status(400).json({ error: 'Start time and end time are required' });
+    }
+
+    const start = new Date(startTime);
+    const end = new Date(endTime);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start >= end) {
+      return res.status(400).json({ error: 'Invalid time range' });
+    }
+
+    const db = getDatabase();
+    let pairRows: Array<{ stock_a: string; stock_b: string }> = [];
+
+    if (pairs && pairs.length > 0) {
+      const placeholders = pairs.map(() => '?').join(',');
+      pairRows = db.prepare(`
+        SELECT stock_a, stock_b
+        FROM stock_pairs
+        WHERE (stock_a || '/' || stock_b) IN (${placeholders}) AND is_active = 1
+      `).all(...pairs) as Array<{ stock_a: string; stock_b: string }>;
+    } else {
+      pairRows = db.prepare(`
+        SELECT stock_a, stock_b
+        FROM stock_pairs
+        WHERE is_active = 1
+        LIMIT 20
+      `).all() as Array<{ stock_a: string; stock_b: string }>;
+    }
+
+    // De-duplicate pair definitions to avoid repeated rows in UI
+    const uniquePairRows = Array.from(
+      new Map(pairRows.map((p) => [`${p.stock_a}|${p.stock_b}`, p])).values()
+    );
+
+    const backtester = new SignalBacktester();
+    const allSignals: BacktestSignal[] = [];
+
+    for (const pair of uniquePairRows) {
+      const points = await backtester.runForPair(pair.stock_a, pair.stock_b, start, end);
+      allSignals.push(
+        ...points.map((p, idx) => ({
+          id: allSignals.length + idx + 1,
+          timestamp: p.timestamp,
+          stockA: p.stockA,
+          stockB: p.stockB,
+          strategyType: p.strategyType,
+          syncCorrelation: p.syncCorrelation,
+          lagCorrelation: p.lagCorrelation,
+          correlationScore: p.correlationScore,
+          volumeScoreA: p.volumeScoreA,
+          volumeScoreB: p.volumeScoreB,
+          volumeScore: p.volumeScore,
+          totalScore: p.totalScore,
+          triggered: p.triggered,
+          entryConfirmed: p.entryConfirmed,
+          leader: p.leader,
+          lagger: p.lagger,
+          leaderMove: p.leaderMove,
+          laggerMove: p.laggerMove,
+          expectedMove: p.expectedMove,
+        }))
+      );
+    }
+
+    allSignals.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+
+    // De-duplicate replay points (same timestamp + pair + strategy)
+    const dedupedSignals = Array.from(
+      new Map(
+        allSignals.map((s) => [`${s.timestamp}|${s.stockA}|${s.stockB}|${s.strategyType ?? 'none'}`, s])
+      ).values()
+    );
+
+    const totalSignals = dedupedSignals.length;
+    const triggeredSignals = dedupedSignals.filter(s => s.triggered).length;
+    const confirmedSignals = dedupedSignals.filter(s => s.entryConfirmed).length;
+    const positiveLagCount = dedupedSignals.filter(s => s.strategyType === 'positive_lag').length;
+    const negativeCorrCount = dedupedSignals.filter(s => s.strategyType === 'negative_corr').length;
+    const avgCorrelationScore = totalSignals > 0
+      ? dedupedSignals.reduce((sum, s) => sum + s.correlationScore, 0) / totalSignals
+      : 0;
+    const avgVolumeScore = totalSignals > 0
+      ? dedupedSignals.reduce((sum, s) => sum + s.volumeScore, 0) / totalSignals
+      : 0;
+    const avgTotalScore = totalSignals > 0
+      ? dedupedSignals.reduce((sum, s) => sum + s.totalScore, 0) / totalSignals
+      : 0;
+    const safePage = Math.max(1, Number(page) || 1);
+    const safePageSize = Math.min(500, Math.max(10, Number(pageSize) || 100));
+    const offset = (safePage - 1) * safePageSize;
+    const pagedSignals = dedupedSignals.slice(offset, offset + safePageSize);
+
+    const result: BacktestResult = {
+      summary: {
+        startTime,
+        endTime,
+        totalSignals,
+        triggeredSignals,
+        confirmedSignals,
+        positiveLagCount,
+        negativeCorrCount,
+        avgCorrelationScore,
+        avgVolumeScore,
+        avgTotalScore,
+      },
+      pagination: {
+        page: safePage,
+        pageSize: safePageSize,
+        totalRows: totalSignals,
+        totalPages: Math.ceil(totalSignals / safePageSize),
+      },
+      signals: pagedSignals,
+    };
+
+    res.json(result);
+  } catch (error: any) {
+    console.error('Replay backtest error:', error);
+    res.status(500).json({ error: error.message || 'Replay backtest failed' });
   }
 });
 
