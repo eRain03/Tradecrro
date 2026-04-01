@@ -7,7 +7,9 @@ const showError = ref(false);
 const errorMessage = ref('');
 
 // Filter state
-const showTriggeredOnly = ref(true);
+const showTriggeredOnly = ref(false);
+const page = ref(1);
+const pageSize = ref(100);
 
 // Form state
 const startDate = ref('');
@@ -22,11 +24,14 @@ const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0];
 startDate.value = yesterday || '';
 endDate.value = today || '';
 
-const runBacktest = async () => {
+const runBacktest = async (resetPage: boolean = true) => {
   isLoading.value = true;
   showError.value = false;
   backtestResult.value = null;
-  showTriggeredOnly.value = true; // Reset filter to show triggered only
+  showTriggeredOnly.value = false; // Default to all signals to avoid empty-table confusion
+  if (resetPage) {
+    page.value = 1;
+  }
 
   try {
     const startDatetime = `${startDate.value}T${startTime.value}:00`;
@@ -38,13 +43,15 @@ const runBacktest = async () => {
       pairs: selectedPairs.value,
     });
 
-    const response = await fetch('/api/backtest/run', {
+    const response = await fetch('/api/backtest/replay', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         startTime: startDatetime,
         endTime: endDatetime,
         pairs: selectedPairs.value.length > 0 ? selectedPairs.value : undefined,
+        page: page.value,
+        pageSize: pageSize.value,
       }),
     });
 
@@ -79,9 +86,9 @@ const formatTime = (timestamp: string) => {
 };
 
 const getStrategyTypeLabel = (strategyType: string | null) => {
-  if (strategyType === 'positive_lag') return '正相关 (滞后)';
-  if (strategyType === 'negative_corr') return '负相关 (同步)';
-  return '未触发';
+  if (strategyType === 'positive_lag') return 'Positive (Lag)';
+  if (strategyType === 'negative_corr') return 'Negative (Sync)';
+  return 'Not Triggered';
 };
 
 const getStrategyTypeClass = (strategyType: string | null) => {
@@ -99,6 +106,19 @@ const filteredSignals = computed(() => {
   return backtestResult.value.signals;
 });
 
+const nextPage = async () => {
+  if (!backtestResult.value?.pagination) return;
+  if (page.value >= backtestResult.value.pagination.totalPages) return;
+  page.value += 1;
+  await runBacktest(false);
+};
+
+const prevPage = async () => {
+  if (page.value <= 1) return;
+  page.value -= 1;
+  await runBacktest(false);
+};
+
 interface BacktestResult {
   summary: {
     startTime: string;
@@ -111,6 +131,12 @@ interface BacktestResult {
     avgCorrelationScore: number;
     avgVolumeScore: number;
     avgTotalScore: number;
+  };
+  pagination?: {
+    page: number;
+    pageSize: number;
+    totalRows: number;
+    totalPages: number;
   };
   signals: Array<{
     id: number;
@@ -141,7 +167,7 @@ interface BacktestResult {
     <div class="view-header">
       <h1>
         <span class="title-separator">◆</span>
-        回测
+        Backtest
         <span class="title-separator">◆</span>
       </h1>
     </div>
@@ -149,32 +175,32 @@ interface BacktestResult {
     <!-- Configuration Form -->
     <div class="config-card">
       <div class="form-section">
-        <h3>时间范围</h3>
+        <h3>Time Range</h3>
         <div class="date-range">
           <div class="date-field">
-            <label>开始日期</label>
+            <label>Start Date</label>
             <input type="date" v-model="startDate" />
           </div>
           <div class="date-field">
-            <label>开始时间</label>
+            <label>Start Time</label>
             <input type="time" v-model="startTime" />
           </div>
           <div class="separator">→</div>
           <div class="date-field">
-            <label>结束日期</label>
+            <label>End Date</label>
             <input type="date" v-model="endDate" />
           </div>
           <div class="date-field">
-            <label>结束时间</label>
+            <label>End Time</label>
             <input type="time" v-model="endTime" />
           </div>
         </div>
       </div>
 
       <div class="form-actions">
-        <button class="run-btn" @click="runBacktest" :disabled="isLoading">
+        <button class="run-btn" @click="runBacktest()" :disabled="isLoading">
           <span class="btn-icon">{{ isLoading ? '⏳' : '▶' }}</span>
-          <span class="btn-text">{{ isLoading ? '回测中...' : '运行回测' }}</span>
+          <span class="btn-text">{{ isLoading ? 'Running...' : 'Run Backtest' }}</span>
         </button>
       </div>
     </div>
@@ -188,8 +214,8 @@ interface BacktestResult {
     <!-- Loading State -->
     <div v-if="isLoading" class="loading-card">
       <span class="loading-spinner">⏳</span>
-      <p>正在回测...</p>
-      <p class="loading-sub">分析历史信号数据</p>
+      <p>Running backtest...</p>
+      <p class="loading-sub">Analyzing historical signal data</p>
     </div>
 
     <!-- Results -->
@@ -197,72 +223,77 @@ interface BacktestResult {
       <!-- Summary Cards -->
       <div class="summary-grid">
         <div class="summary-card highlight">
-          <div class="summary-label">总信号数</div>
+          <div class="summary-label">Total Signals</div>
           <div class="summary-value">{{ backtestResult.summary.totalSignals }}</div>
-          <div class="summary-sub">时间范围内</div>
+          <div class="summary-sub">Within range</div>
         </div>
 
         <div class="summary-card">
-          <div class="summary-label">触发信号</div>
+          <div class="summary-label">Triggered Signals</div>
           <div class="summary-value">{{ backtestResult.summary.triggeredSignals }}</div>
-          <div class="summary-sub">总分≥87</div>
+          <div class="summary-sub">Total score ≥ 87</div>
         </div>
 
         <div class="summary-card">
-          <div class="summary-label">已确认入场</div>
+          <div class="summary-label">Entry Confirmed</div>
           <div class="summary-value">{{ backtestResult.summary.confirmedSignals }}</div>
-          <div class="summary-sub">满足入场条件</div>
+          <div class="summary-sub">Entry rules satisfied</div>
         </div>
 
         <div class="summary-card">
-          <div class="summary-label">正相关策略</div>
+          <div class="summary-label">Positive Lag Strategy</div>
           <div class="summary-value">{{ backtestResult.summary.positiveLagCount }}</div>
-          <div class="summary-sub">领先/滞后</div>
+          <div class="summary-sub">Leader/Lagger</div>
         </div>
 
         <div class="summary-card">
-          <div class="summary-label">负相关策略</div>
+          <div class="summary-label">Negative Sync Strategy</div>
           <div class="summary-value">{{ backtestResult.summary.negativeCorrCount }}</div>
-          <div class="summary-sub">同步联动</div>
+          <div class="summary-sub">Synchronous inverse</div>
         </div>
 
         <div class="summary-card">
-          <div class="summary-label">平均总分</div>
+          <div class="summary-label">Average Total Score</div>
           <div class="summary-value">{{ backtestResult.summary.avgTotalScore.toFixed(1) }}</div>
-          <div class="summary-sub">所有信号平均</div>
+          <div class="summary-sub">Average across all signals</div>
         </div>
       </div>
 
       <!-- Signals Table -->
       <div class="signals-card">
         <div class="table-header">
-          <h3>信号列表 ({{ filteredSignals.length }} 个)</h3>
+          <h3>Signals ({{ filteredSignals.length }})</h3>
           <button
             class="filter-btn"
             :class="{ 'active': showTriggeredOnly }"
             @click="showTriggeredOnly = !showTriggeredOnly"
           >
             <span class="filter-icon">{{ showTriggeredOnly ? '✓' : '○' }}</span>
-            <span class="filter-text">只显示触发信号</span>
-            <span class="filter-count">(触发：{{ backtestResult.summary.triggeredSignals }} / 总计：{{ backtestResult.summary.totalSignals }})</span>
+            <span class="filter-text">Triggered only</span>
+            <span class="filter-count">(Triggered: {{ backtestResult.summary.triggeredSignals }} / Total: {{ backtestResult.summary.totalSignals }})</span>
           </button>
+        </div>
+        <div class="table-header" v-if="backtestResult.pagination">
+          <button class="filter-btn" @click="prevPage" :disabled="page <= 1 || isLoading">Prev</button>
+          <span class="filter-count">Page {{ backtestResult.pagination.page }} / {{ backtestResult.pagination.totalPages }}</span>
+          <button class="filter-btn" @click="nextPage" :disabled="page >= backtestResult.pagination.totalPages || isLoading">Next</button>
         </div>
         <div class="signals-table-container">
           <table v-if="filteredSignals.length > 0">
             <thead>
               <tr>
-                <th>时间</th>
-                <th>交易对</th>
-                <th>策略类型</th>
-                <th>相关性分数</th>
-                <th>成交量分数</th>
-                <th>总分</th>
-                <th>领先/滞后</th>
-                <th>状态</th>
+                <th>Time</th>
+                <th>Pair</th>
+                <th>Strategy</th>
+                <th>Correlation Score</th>
+                <th>Volume Score</th>
+                <th>Total</th>
+                <th>Leader/Lagger</th>
+                <th>Status</th>
               </tr>
             </thead>
             <tbody>
-              <tr v-for="signal in filteredSignals" :key="signal.id">
+              <tr v-for="signal in filteredSignals" :key="`${signal.timestamp}-${signal.stockA}-${signal.stockB}-${signal.strategyType}`">
                 <td class="time-cell">{{ formatTime(signal.timestamp) }}</td>
                 <td class="pair-cell">
                   <div class="pair-box">
@@ -295,11 +326,11 @@ interface BacktestResult {
                   <span v-if="signal.strategyType === 'positive_lag'">
                     {{ signal.leader }} → {{ signal.lagger }}
                   </span>
-                  <span v-else>同步</span>
+                  <span v-else>Sync</span>
                 </td>
                 <td>
                   <span class="status-badge" :class="{ 'triggered': signal.triggered }">
-                    {{ signal.triggered ? '可交易' : '观察中' }}
+                    {{ signal.triggered ? 'Tradable' : 'Watch' }}
                   </span>
                 </td>
               </tr>
@@ -307,7 +338,7 @@ interface BacktestResult {
           </table>
           <div v-else class="no-signals">
             <span class="no-signals-icon">∅</span>
-            <p>未找到触发信号</p>
+            <p>No triggered signals found</p>
           </div>
         </div>
       </div>

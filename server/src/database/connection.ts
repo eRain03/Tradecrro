@@ -10,6 +10,7 @@ export function getDatabase(): Database.Database {
     const dbPath = path.resolve(DB_PATH);
     db = new Database(dbPath);
     db.pragma('journal_mode = WAL');
+    db.pragma('busy_timeout = 5000');
   }
   return db;
 }

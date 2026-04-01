@@ -38,9 +38,11 @@ export class PositionManager {
    */
   canOpenPosition(entryPrice: number): boolean {
     const positionValue = this.getOpenPositionValue();
-    const newPositionValue = this.getMaxPositionValue();
+    const positionSize = this.calculatePositionSize(entryPrice);
+    const newPositionValue = positionSize * entryPrice;
 
-    return positionValue + newPositionValue <= this.totalPortfolioValue;
+    return newPositionValue <= this.getMaxPositionValue() &&
+           positionValue + newPositionValue <= this.totalPortfolioValue;
   }
 
   /**

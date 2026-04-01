@@ -9,6 +9,11 @@ router.get('/', (req, res) => {
     const limit = parseInt(req.query.limit as string) || 100;
     const db = getDatabase();
     const signals = db.prepare(`
+      WITH latest AS (
+        SELECT MAX(id) as id
+        FROM signals
+        GROUP BY pair_id, timestamp
+      )
       SELECT s.id, s.timestamp,
              s.correlation_sync as syncCorrelation,
              s.correlation_lag as lagCorrelation,
@@ -27,6 +32,7 @@ router.get('/', (req, res) => {
              s.leader, s.lagger,
              p.stock_a as stockA, p.stock_b as stockB
       FROM signals s
+      JOIN latest l ON s.id = l.id
       JOIN stock_pairs p ON s.pair_id = p.id
       ORDER BY s.timestamp DESC
       LIMIT ?
@@ -63,6 +69,12 @@ router.get('/triggered', (req, res) => {
     const limit = parseInt(req.query.limit as string) || 50;
     const db = getDatabase();
     const signals = db.prepare(`
+      WITH latest_triggered AS (
+        SELECT MAX(id) as id
+        FROM signals
+        WHERE triggered = 1
+        GROUP BY pair_id, timestamp
+      )
       SELECT s.id, s.timestamp,
              s.correlation_sync as syncCorrelation,
              s.correlation_lag as lagCorrelation,
@@ -80,8 +92,8 @@ router.get('/triggered', (req, res) => {
              s.leader, s.lagger,
              p.stock_a as stockA, p.stock_b as stockB
       FROM signals s
+      JOIN latest_triggered lt ON s.id = lt.id
       JOIN stock_pairs p ON s.pair_id = p.id
-      WHERE s.triggered = 1
       ORDER BY s.timestamp DESC
       LIMIT ?
     `).all(limit);

@@ -30,8 +30,8 @@ export interface PairScore {
 export class ScoringEngine {
   private readonly CORRELATION_MAX = 80;
   private readonly VOLUME_MAX = 20;
-  // Threshold: 64 = 80% of max correlation score (for forex pairs without volume data)
-  private readonly THRESHOLD = 64;
+  // Trading threshold from config (default 87)
+  private readonly THRESHOLD = config.trading.scoreThreshold;
 
   /**
    * Calculate complete pair score
@@ -65,14 +65,18 @@ export class ScoringEngine {
 
     console.log(`[ScoringEngine] ${stockA}/${stockB}: syncResult.correlation=${syncResult.correlation}, syncScore=${SyncCorrelation.calculateScore(syncResult.correlation)}`);
 
-    // Determine which correlation to use
+    // Determine which correlation to use:
+    // - Sync correlation only counts when it is NEGATIVE (inverse strategy)
+    // - Lag correlation only counts when it is POSITIVE (lead-lag strategy)
     const syncScore = SyncCorrelation.calculateScore(syncResult.correlation);
     // Use discounted correlation for lag score to penalize higher lags
     const lagScore = lagResult ? LagCorrelation.calculateScore(lagResult.discountedCorrelation) : 0;
+    const negativeSyncScore = syncResult.isNegative ? syncScore : 0;
+    const positiveLagScore = lagResult?.isPositive ? lagScore : 0;
 
     // Use the stronger correlation
-    const useSync = syncScore >= lagScore;
-    const correlationScore = Math.max(syncScore, lagScore);
+    const useSync = negativeSyncScore >= positiveLagScore;
+    const correlationScore = Math.max(negativeSyncScore, positiveLagScore);
 
     // Calculate volume scores
     const volumeRatioA = VolumeAnalyzer.calculateRatio(currentVolumeA, avgVolumeA);

@@ -46,7 +46,11 @@ export class VolumeAnalyzer {
    * Ratio = Current Volume / Average Volume
    */
   static calculateRatio(currentVolume: number, averageVolume: number): number {
-    if (averageVolume === 0) return 1;
+    if (averageVolume <= 0) {
+      // If average volume is unavailable, do not force neutral ratio=1.
+      // Return 0 when no current volume exists, or a high ratio when current exists.
+      return currentVolume > 0 ? 3 : 0;
+    }
     return currentVolume / averageVolume;
   }
 
