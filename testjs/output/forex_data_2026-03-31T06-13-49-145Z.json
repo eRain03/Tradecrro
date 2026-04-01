@@ -1,0 +1,79 @@
+{
+  "mode": "specified",
+  "timestamp": "2026-03-31T06-13-49-145Z",
+  "count": 6,
+  "data": [
+    {
+      "epic": "CS.D.EURUSD.MINI.IP",
+      "name": "欧元/美元 迷你合约",
+      "instrumentType": "N/A",
+      "bid": 13050.8,
+      "offer": 13052.8,
+      "high": 13053.3,
+      "low": 13050.4,
+      "change": null,
+      "marketStatus": "TRADEABLE",
+      "timestamp": "2026-03-31T06:13:44.538Z"
+    },
+    {
+      "epic": "CS.D.GBPUSD.MINI.IP",
+      "name": "英镑/美元 迷你合约",
+      "instrumentType": "N/A",
+      "bid": 1.32001,
+      "offer": 1.32016,
+      "high": 1.32255,
+      "low": 1.31586,
+      "change": null,
+      "marketStatus": "TRADEABLE",
+      "timestamp": "2026-03-31T06:13:45.419Z"
+    },
+    {
+      "epic": "CS.D.USDJPY.MINI.IP",
+      "name": "美元/日元 迷你合约",
+      "instrumentType": "N/A",
+      "bid": 159.649,
+      "offer": 159.666,
+      "high": 159.982,
+      "low": 159.477,
+      "change": null,
+      "marketStatus": "TRADEABLE",
+      "timestamp": "2026-03-31T06:13:46.297Z"
+    },
+    {
+      "epic": "CS.D.AUDUSD.MINI.IP",
+      "name": "澳元/美元 迷你合约",
+      "instrumentType": "N/A",
+      "bid": 0.68485,
+      "offer": 0.68494,
+      "high": 0.68753,
+      "low": 0.68338,
+      "change": null,
+      "marketStatus": "TRADEABLE",
+      "timestamp": "2026-03-31T06:13:47.198Z"
+    },
+    {
+      "epic": "CS.D.USDCAD.MINI.IP",
+      "name": "美元/加元 迷你合约",
+      "instrumentType": "N/A",
+      "bid": 1.39342,
+      "offer": 1.39363,
+      "high": 1.3938,
+      "low": 1.39093,
+      "change": null,
+      "marketStatus": "TRADEABLE",
+      "timestamp": "2026-03-31T06:13:48.220Z"
+    },
+    {
+      "epic": "CS.D.USDCHF.MINI.IP",
+      "name": "美元/瑞士法郎 迷你合约",
+      "instrumentType": "N/A",
+      "bid": 0.79911,
+      "offer": 0.79926,
+      "high": 0.80037,
+      "low": 0.79781,
+      "change": null,
+      "marketStatus": "TRADEABLE",
+      "timestamp": "2026-03-31T06:13:49.145Z"
+    }
+  ]
+}

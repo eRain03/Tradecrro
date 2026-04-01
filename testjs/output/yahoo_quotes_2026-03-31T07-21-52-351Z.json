@@ -1,0 +1,73 @@
+{
+  "mode": "quotes",
+  "timestamp": "2026-03-31T07-21-52-351Z",
+  "count": 6,
+  "data": [
+    {
+      "symbol": "EURUSD=X",
+      "name": "EURUSD=X",
+      "currency": "USD",
+      "price": 1.1472,
+      "previousClose": 1.1467,
+      "open": 1.1467,
+      "dayHigh": 1.1467,
+      "dayLow": 1.1467,
+      "timestamp": "2026-03-31T07:21:46.086Z"
+    },
+    {
+      "symbol": "GBPUSD=X",
+      "name": "GBPUSD=X",
+      "currency": "USD",
+      "price": 1.3198,
+      "previousClose": 1.3185,
+      "open": 1.3185,
+      "dayHigh": 1.3185,
+      "dayLow": 1.3185,
+      "timestamp": "2026-03-31T07:21:47.326Z"
+    },
+    {
+      "symbol": "USDJPY=X",
+      "name": "USDJPY=X",
+      "currency": "JPY",
+      "price": 159.755,
+      "previousClose": 159.711,
+      "open": 159.711,
+      "dayHigh": 159.711,
+      "dayLow": 159.711,
+      "timestamp": "2026-03-31T07:21:48.610Z"
+    },
+    {
+      "symbol": "AUDUSD=X",
+      "name": "AUDUSD=X",
+      "currency": "USD",
+      "price": 0.685,
+      "previousClose": 0.6853,
+      "open": 0.6853,
+      "dayHigh": 0.6853,
+      "dayLow": 0.6853,
+      "timestamp": "2026-03-31T07:21:49.838Z"
+    },
+    {
+      "symbol": "USDCAD=X",
+      "name": "USDCAD=X",
+      "currency": "CAD",
+      "price": 1.393,
+      "previousClose": 1.3923,
+      "open": 1.3923,
+      "dayHigh": 1.3923,
+      "dayLow": 1.3923,
+      "timestamp": "2026-03-31T07:21:51.089Z"
+    },
+    {
+      "symbol": "USDCHF=X",
+      "name": "USDCHF=X",
+      "currency": "CHF",
+      "price": 0.7997,
+      "previousClose": 0.7989,
+      "open": 0.7989,
+      "dayHigh": 0.7989,
+      "dayLow": 0.7989,
+      "timestamp": "2026-03-31T07:21:52.326Z"
+    }
+  ]
+}
