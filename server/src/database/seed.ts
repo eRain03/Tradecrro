@@ -1,24 +1,22 @@
 import { getDatabase } from './connection';
 
 /**
- * 从 IG API 同步外汇对到数据库
- * IG has been removed - this function now uses default forex pairs
+ * Legacy placeholder kept for compatibility.
  */
 async function syncForexPairsFromIG(): Promise<void> {
-  // IG API has been removed, use default forex pairs instead
-  console.log('⚠️ IG API has been removed, using default forex pairs');
+  console.log('⚠️ IG API has been removed, using default stock pairs');
   throw new Error('IG API not available');
 }
 
 /**
- * 主种子函数
+ * Main seed function
  */
 export function seedData(): void {
   const db = getDatabase();
 
-  console.log('🌱 开始初始化数据库...');
+  console.log('🌱 Seeding database...');
 
-  // 插入默认配置
+  // Insert default settings
   const insertSetting = db.prepare(`
     INSERT OR REPLACE INTO settings (key, value, updated_at)
     VALUES (?, ?, CURRENT_TIMESTAMP)
@@ -39,73 +37,83 @@ export function seedData(): void {
     insertSetting.run(key, value);
   }
 
-  console.log('✅ 默认配置已插入');
+  console.log('✅ Default settings inserted');
 
-  // 使用默认外汇对列表
-  console.log('⚠️ 使用默认外汇对列表...');
-  seedDefaultForexPairs();
+  // Use the built-in US stock universe
+  console.log('⚠️ Using built-in US stock pairs...');
+  seedDefaultStockPairs();
 }
 
 /**
- * 种入默认外汇对列表（备用方案）
+ * Seed the default US stock pair list
  */
-function seedDefaultForexPairs(): void {
+function seedDefaultStockPairs(): void {
   const db = getDatabase();
 
-  const defaultPairs = [
-    // 主要货币对
-    'EUR/USD', 'GBP/USD', 'USD/JPY', 'USD/CHF',
-    'AUD/USD', 'USD/CAD', 'NZD/USD',
+  const stockGroups: Record<string, string[]> = {
+    mega_cap_tech: ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META', 'NVDA'],
+    semiconductors: ['NVDA', 'AMD', 'AVGO', 'QCOM', 'INTC', 'MU'],
+    banks: ['JPM', 'BAC', 'WFC', 'C', 'GS', 'MS'],
+    payment_networks: ['V', 'MA', 'AXP', 'PYPL'],
+    consumer_retail: ['AMZN', 'WMT', 'COST', 'TGT', 'HD', 'LOW'],
+    travel_leisure: ['BKNG', 'ABNB', 'RCL', 'CCL', 'MAR', 'HLT'],
+    energy: ['XOM', 'CVX', 'COP', 'SLB', 'EOG', 'OXY'],
+    healthcare: ['UNH', 'JNJ', 'PFE', 'MRK', 'ABBV', 'LLY'],
+    telecom_media: ['T', 'VZ', 'TMUS', 'NFLX', 'DIS', 'CMCSA'],
+  };
 
-    // EUR 交叉
-    'EUR/GBP', 'EUR/JPY', 'EUR/CHF', 'EUR/AUD', 'EUR/CAD', 'EUR/NZD',
-
-    // GBP 交叉
-    'GBP/JPY', 'GBP/CHF', 'GBP/AUD', 'GBP/CAD', 'GBP/NZD',
-
-    // AUD 交叉
-    'AUD/JPY', 'AUD/CAD', 'AUD/CHF', 'AUD/NZD',
-
-    // CAD, CHF, NZD 交叉
-    'CAD/JPY', 'CHF/JPY', 'NZD/JPY', 'NZD/CAD', 'NZD/CHF',
-  ];
-
-  // 收集配对
   const pairsToInsert: Array<[string, string, string, number]> = [];
   const pairSet = new Set<string>();
 
-  for (let i = 0; i < defaultPairs.length; i++) {
-    for (let j = i + 1; j < defaultPairs.length; j++) {
-      const [base1] = defaultPairs[i].split('/');
-      const [base2] = defaultPairs[j].split('/');
+  db.prepare(`
+    UPDATE stock_pairs
+    SET is_active = 0
+  `).run();
 
-      // 同一基础货币的配对
-      if (base1 === base2) {
-        const key = `${defaultPairs[i]}-${defaultPairs[j]}`;
+  for (const symbols of Object.values(stockGroups)) {
+    for (let i = 0; i < symbols.length; i++) {
+      for (let j = i + 1; j < symbols.length; j++) {
+        const key = `${symbols[i]}-${symbols[j]}`;
         if (!pairSet.has(key)) {
           pairSet.add(key);
-          pairsToInsert.push([defaultPairs[i], defaultPairs[j], 'correlation', 1]);
+          pairsToInsert.push([symbols[i], symbols[j], 'correlation', 1]);
         }
       }
     }
   }
 
-  // 批量插入
+  // Bulk insert
   const insertPair = db.prepare(`
-    INSERT OR IGNORE INTO stock_pairs (stock_a, stock_b, strategy_type, is_active)
+    INSERT INTO stock_pairs (stock_a, stock_b, strategy_type, is_active)
     VALUES (?, ?, ?, ?)
+  `);
+  const findPair = db.prepare(`
+    SELECT id
+    FROM stock_pairs
+    WHERE stock_a = ? AND stock_b = ?
+    LIMIT 1
+  `);
+  const updatePair = db.prepare(`
+    UPDATE stock_pairs
+    SET strategy_type = ?, is_active = ?
+    WHERE id = ?
   `);
 
   const insertMany = db.transaction((pairs: Array<[string, string, string, number]>) => {
     for (const pair of pairs) {
-      insertPair.run(...pair);
+      const existing = findPair.get(pair[0], pair[1]) as { id: number } | undefined;
+      if (existing) {
+        updatePair.run(pair[2], pair[3], existing.id);
+      } else {
+        insertPair.run(...pair);
+      }
     }
   });
 
   insertMany(pairsToInsert);
 
   const count = db.prepare('SELECT COUNT(*) as count FROM stock_pairs').get() as { count: number };
-  console.log(`✅ 已插入 ${count.count} 个默认外汇对配对`);
+  console.log(`✅ Inserted ${count.count} default stock pairs`);
 }
 
 if (require.main === module) {

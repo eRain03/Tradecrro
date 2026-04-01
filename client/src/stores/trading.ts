@@ -2,6 +2,24 @@ import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 import api, { type Signal, type Trade, type Pair } from '../api/http';
 
+function getSignalDedupKey(signal: Signal): string {
+  const secondTimestamp = signal.timestamp.slice(0, 19);
+  return `${secondTimestamp}|${signal.stockA}|${signal.stockB}`;
+}
+
+function dedupeSignals(signalList: Signal[]): Signal[] {
+  const seen = new Set<string>();
+
+  return signalList.filter((signal) => {
+    const key = getSignalDedupKey(signal);
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
 export const useTradingStore = defineStore('trading', () => {
   // State
   const pairs = ref<Pair[]>([]);
@@ -44,7 +62,7 @@ export const useTradingStore = defineStore('trading', () => {
   async function fetchSignals(limit = 100) {
     try {
       isLoading.value = true;
-      signals.value = await api.getSignals(limit);
+      signals.value = dedupeSignals(await api.getSignals(limit));
     } catch (e) {
       error.value = 'Failed to fetch signals';
     } finally {
@@ -79,9 +97,9 @@ export const useTradingStore = defineStore('trading', () => {
   }
 
   function addSignal(signal: Signal) {
-    signals.value.unshift(signal);
+    signals.value = dedupeSignals([signal, ...signals.value]);
     if (signals.value.length > 100) {
-      signals.value.pop();
+      signals.value = signals.value.slice(0, 100);
     }
   }
 

@@ -7,6 +7,12 @@ interface Config {
   dataSource: {
     provider: 'yahoo' | 'simulated';
   };
+  /** Databento: 仅用于回测历史 K 线（通过 Python 官方客户端拉取） */
+  databento: {
+    apiKey: string;
+    dataset: string;
+    python: string;
+  };
   server: {
     port: number;
     wsPort: number;
@@ -29,6 +35,11 @@ interface Config {
 export const config: Config = {
   dataSource: {
     provider: (process.env.DATA_SOURCE as 'yahoo' | 'simulated') || 'yahoo',
+  },
+  databento: {
+    apiKey: (process.env.DATABENTO_API_KEY || '').trim(),
+    dataset: (process.env.DATABENTO_DATASET || 'DBEQ.BASIC').trim(),
+    python: process.env.DATABENTO_PYTHON || 'python3',
   },
   server: {
     port: parseInt(process.env.PORT || '3001', 10),

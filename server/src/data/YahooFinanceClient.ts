@@ -1,4 +1,4 @@
-import yahooFinance from 'yahoo-finance2';
+import YahooFinance from 'yahoo-finance2';
 
 export interface YahooQuote {
   symbol: string;
@@ -26,8 +26,13 @@ export interface HistoricalData {
  * Rate limit: ~2000 requests per hour per IP
  */
 export class YahooFinanceClient {
+  private static client = new YahooFinance();
   private lastRequestTime: number = 0;
   private minRequestInterval: number = 100; // 100ms between requests
+
+  private toFiniteNumber(value: unknown, fallback: number = 0): number {
+    return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+  }
 
   constructor() {
     // yahoo-finance2 default singleton client
@@ -43,17 +48,23 @@ export class YahooFinanceClient {
       // Yahoo uses different symbol formats
       const yahooSymbol = this.normalizeSymbol(symbol);
 
-      const result: any = await yahooFinance.quote(yahooSymbol);
+      const result: any = await YahooFinanceClient.client.quote(yahooSymbol);
+      const marketPrice = result.regularMarketPrice ?? 0;
+      const bid = result.bid ?? marketPrice;
+      const ask = result.ask ?? marketPrice;
+      const volume = result.regularMarketVolume ?? 0;
+      const change = result.regularMarketChange ?? 0;
+      const changePercent = result.regularMarketChangePercent ?? 0;
 
       return {
         symbol: symbol, // Return original symbol
-        price: result.regularMarketPrice || 0,
-        bid: result.bid || result.regularMarketPrice || 0,
-        ask: result.ask || result.regularMarketPrice || 0,
-        volume: result.regularMarketVolume || 0,
+        price: marketPrice,
+        bid,
+        ask,
+        volume,
         timestamp: new Date(),
-        change: result.regularMarketChange || 0,
-        changePercent: result.regularMarketChangePercent || 0,
+        change,
+        changePercent,
       };
     } catch (error) {
       console.error(`Failed to get quote for ${symbol}:`, error);
@@ -81,20 +92,22 @@ export class YahooFinanceClient {
         interval: interval as any,
       };
 
-      const result: any = await yahooFinance.chart(yahooSymbol, queryOptions);
+      const result: any = await YahooFinanceClient.client.chart(yahooSymbol, queryOptions);
 
       if (!result.quotes || result.quotes.length === 0) {
         return [];
       }
 
-      return result.quotes.map((item: any) => ({
+      const quotes = result.quotes.map((item: any) => ({
         date: new Date(item.date),
-        open: item.open,
-        high: item.high,
-        low: item.low,
-        close: item.close,
-        volume: item.volume,
+        open: this.toFiniteNumber(item.open),
+        high: this.toFiniteNumber(item.high),
+        low: this.toFiniteNumber(item.low),
+        close: this.toFiniteNumber(item.close),
+        volume: this.toFiniteNumber(item.volume),
       }));
+
+      return quotes;
     } catch (error) {
       console.error(`Failed to get historical data for ${symbol}:`, error);
       // Return empty array instead of throwing
@@ -131,7 +144,7 @@ export class YahooFinanceClient {
     await this.rateLimit();
 
     try {
-      const results: any = await yahooFinance.search(query);
+      const results: any = await YahooFinanceClient.client.search(query);
 
       return results.quotes.map((q: any) => ({
         symbol: q.symbol,
@@ -157,7 +170,7 @@ export class YahooFinanceClient {
 
     try {
       const yahooSymbol = this.normalizeSymbol(symbol);
-      const result: any = await yahooFinance.chart(yahooSymbol, {
+      const result: any = await YahooFinanceClient.client.chart(yahooSymbol, {
         period1: startTime,
         period2: endTime,
         interval: interval as any,
@@ -167,14 +180,16 @@ export class YahooFinanceClient {
         return [];
       }
 
-      return result.quotes.map((item: any) => ({
+      const quotes = result.quotes.map((item: any) => ({
         date: new Date(item.date),
-        open: item.open,
-        high: item.high,
-        low: item.low,
-        close: item.close,
-        volume: item.volume,
+        open: this.toFiniteNumber(item.open),
+        high: this.toFiniteNumber(item.high),
+        low: this.toFiniteNumber(item.low),
+        close: this.toFiniteNumber(item.close),
+        volume: this.toFiniteNumber(item.volume),
       }));
+
+      return quotes;
     } catch (error) {
       console.error(`Failed to get historical range for ${symbol}:`, error);
       return [];

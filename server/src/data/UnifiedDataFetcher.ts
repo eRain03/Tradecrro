@@ -40,12 +40,17 @@ export class UnifiedDataFetcher {
   private yahooClient: YahooFinanceClient;
   private source: DataSource;
   private priceHistory: Map<string, StockData[]> = new Map();
+  private lastCumulativeVolume: Map<string, { volume: number; dateKey: string }> = new Map();
   private isRunning: boolean = false;
   private intervalId: NodeJS.Timeout | null = null;
   private readonly lookbackPoints: number;
 
   // Per-symbol random state for independent randomness
   private symbolRandomStates: Map<string, number> = new Map();
+
+  private toFinite(value: unknown, fallback: number = 0): number {
+    return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+  }
 
   constructor(source: DataSource = 'yahoo') {
     this.source = source;
@@ -147,6 +152,26 @@ export class UnifiedDataFetcher {
    */
   private async fetchFromYahoo(symbol: string): Promise<StockData> {
     const quote = await this.yahooClient.getQuote(symbol);
+    const history = this.priceHistory.get(symbol) || [];
+    const dateKey = quote.timestamp.toISOString().slice(0, 10);
+    const lastVolumeState = this.lastCumulativeVolume.get(symbol);
+
+    let normalizedVolume = 0;
+
+    if (lastVolumeState && lastVolumeState.dateKey === dateKey) {
+      normalizedVolume = Math.max(quote.volume - lastVolumeState.volume, 0);
+    } else if (history.length > 0) {
+      const recentVolumes = history
+        .slice(-Math.min(this.lookbackPoints, history.length))
+        .map(item => item.volume)
+        .filter(volume => Number.isFinite(volume) && volume >= 0);
+
+      if (recentVolumes.length > 0) {
+        normalizedVolume = recentVolumes.reduce((sum, volume) => sum + volume, 0) / recentVolumes.length;
+      }
+    }
+
+    this.lastCumulativeVolume.set(symbol, { volume: quote.volume, dateKey });
 
     return {
       symbol,
@@ -154,7 +179,7 @@ export class UnifiedDataFetcher {
       price: quote.price,
       bid: quote.bid,
       ask: quote.ask,
-      volume: quote.volume,
+      volume: normalizedVolume,
       source: 'yahoo',
     };
   }
@@ -277,7 +302,7 @@ export class UnifiedDataFetcher {
           price: h.close,
           bid: h.low,
           ask: h.high,
-          volume: h.volume,
+          volume: this.toFinite(h.volume),
           source: 'yahoo',
         }));
 

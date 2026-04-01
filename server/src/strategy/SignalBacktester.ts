@@ -2,7 +2,8 @@ import config from '../config';
 import ReturnCalculator from '../core/data/ReturnCalculator';
 import ScoringEngine from '../core/scoring/ScoringEngine';
 import EntryChecker from './EntryChecker';
-import YahooFinanceClient, { HistoricalData } from '../data/YahooFinanceClient';
+import { getHistoricalRangeSource, type HistoricalRangeSource } from '../data/historicalProvider';
+import type { HistoricalData } from '../data/YahooFinanceClient';
 
 export interface BacktestSignalPoint {
   timestamp: string;
@@ -26,10 +27,19 @@ export interface BacktestSignalPoint {
   entryReason?: string;
 }
 
+export interface RunForPairProgressEvent {
+  kind: 'symbol_start' | 'symbol_done' | 'compute';
+  stockA: string;
+  stockB: string;
+  /** 拉取 K 线时的标的 */
+  symbol?: string;
+  barCount?: number;
+}
+
 export class SignalBacktester {
   private scoringEngine = new ScoringEngine();
   private entryChecker = new EntryChecker();
-  private yahoo = new YahooFinanceClient();
+  private historical: HistoricalRangeSource = getHistoricalRangeSource();
 
   // Yahoo reliable intraday bar
   private readonly yahooInterval = '1m';
@@ -39,16 +49,50 @@ export class SignalBacktester {
     Math.floor((config.trading.lookbackWindow * 60) / this.intervalSeconds)
   );
 
+  private toFinite(value: unknown, fallback: number = 0): number {
+    return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+  }
+
   async runForPair(
     stockA: string,
     stockB: string,
     startTime: Date,
-    endTime: Date
+    endTime: Date,
+    options?: { onProgress?: (e: RunForPairProgressEvent) => void }
   ): Promise<BacktestSignalPoint[]> {
-    const [historyA, historyB] = await Promise.all([
-      this.yahoo.getHistoricalRange(stockA, startTime, endTime, this.yahooInterval),
-      this.yahoo.getHistoricalRange(stockB, startTime, endTime, this.yahooInterval),
-    ]);
+    const onProgress = options?.onProgress;
+
+    onProgress?.({ kind: 'symbol_start', stockA, stockB, symbol: stockA });
+    const historyA = await this.historical.getHistoricalRange(
+      stockA,
+      startTime,
+      endTime,
+      this.yahooInterval
+    );
+    onProgress?.({
+      kind: 'symbol_done',
+      stockA,
+      stockB,
+      symbol: stockA,
+      barCount: historyA.length,
+    });
+
+    onProgress?.({ kind: 'symbol_start', stockA, stockB, symbol: stockB });
+    const historyB = await this.historical.getHistoricalRange(
+      stockB,
+      startTime,
+      endTime,
+      this.yahooInterval
+    );
+    onProgress?.({
+      kind: 'symbol_done',
+      stockA,
+      stockB,
+      symbol: stockB,
+      barCount: historyB.length,
+    });
+
+    onProgress?.({ kind: 'compute', stockA, stockB });
 
     const seriesA = this.toMap(historyA);
     const seriesB = this.toMap(historyB);
@@ -65,8 +109,8 @@ export class SignalBacktester {
 
       const pricesA = windowTimes.map((t) => seriesA.get(t)!.close);
       const pricesB = windowTimes.map((t) => seriesB.get(t)!.close);
-      const volumesA = windowTimes.slice(1).map((t) => seriesA.get(t)!.volume);
-      const volumesB = windowTimes.slice(1).map((t) => seriesB.get(t)!.volume);
+      const volumesA = windowTimes.slice(1).map((t) => this.toFinite(seriesA.get(t)!.volume));
+      const volumesB = windowTimes.slice(1).map((t) => this.toFinite(seriesB.get(t)!.volume));
 
       const returnsA = ReturnCalculator.calculateReturns(pricesA);
       const returnsB = ReturnCalculator.calculateReturns(pricesB);
@@ -81,9 +125,9 @@ export class SignalBacktester {
         stockB,
         returnsA,
         returnsB,
-        latestA.volume,
+        this.toFinite(latestA.volume),
         avgVolumeA,
-        latestB.volume,
+        this.toFinite(latestB.volume),
         avgVolumeB
       );
 

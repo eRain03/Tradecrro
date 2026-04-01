@@ -83,8 +83,14 @@ export class SignalGenerator {
     );
 
     // Calculate average volumes
-    const volumesA = historyA.slice(-this.lookbackPoints).map(h => h.volume);
-    const volumesB = historyB.slice(-this.lookbackPoints).map(h => h.volume);
+    const volumesA = historyA
+      .slice(-(this.lookbackPoints + 1), -1)
+      .map(h => h.volume)
+      .filter(v => Number.isFinite(v) && v >= 0);
+    const volumesB = historyB
+      .slice(-(this.lookbackPoints + 1), -1)
+      .map(h => h.volume)
+      .filter(v => Number.isFinite(v) && v >= 0);
     const avgVolumeA = volumesA.reduce((a, b) => a + b, 0) / volumesA.length || 1;
     const avgVolumeB = volumesB.reduce((a, b) => a + b, 0) / volumesB.length || 1;
 
