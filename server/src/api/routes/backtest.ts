@@ -189,6 +189,7 @@ router.post('/run', (req, res) => {
 router.post('/replay', async (req, res) => {
   try {
     const { startTime, endTime, pairs, page = 1, pageSize = 100 }: BacktestRequest = req.body;
+    const { startTime, endTime, pairs }: BacktestRequest = req.body;
 
     if (!startTime || !endTime) {
       return res.status(400).json({ error: 'Start time and end time are required' });
@@ -228,6 +229,10 @@ router.post('/replay', async (req, res) => {
     const allSignals: BacktestSignal[] = [];
 
     for (const pair of uniquePairRows) {
+    const backtester = new SignalBacktester();
+    const allSignals: BacktestSignal[] = [];
+
+    for (const pair of pairRows) {
       const points = await backtester.runForPair(pair.stock_a, pair.stock_b, start, end);
       allSignals.push(
         ...points.map((p, idx) => ({
@@ -281,6 +286,20 @@ router.post('/replay', async (req, res) => {
     const safePageSize = Math.min(500, Math.max(10, Number(pageSize) || 100));
     const offset = (safePage - 1) * safePageSize;
     const pagedSignals = dedupedSignals.slice(offset, offset + safePageSize);
+    const totalSignals = allSignals.length;
+    const triggeredSignals = allSignals.filter(s => s.triggered).length;
+    const confirmedSignals = allSignals.filter(s => s.entryConfirmed).length;
+    const positiveLagCount = allSignals.filter(s => s.strategyType === 'positive_lag').length;
+    const negativeCorrCount = allSignals.filter(s => s.strategyType === 'negative_corr').length;
+    const avgCorrelationScore = totalSignals > 0
+      ? allSignals.reduce((sum, s) => sum + s.correlationScore, 0) / totalSignals
+      : 0;
+    const avgVolumeScore = totalSignals > 0
+      ? allSignals.reduce((sum, s) => sum + s.volumeScore, 0) / totalSignals
+      : 0;
+    const avgTotalScore = totalSignals > 0
+      ? allSignals.reduce((sum, s) => sum + s.totalScore, 0) / totalSignals
+      : 0;
 
     const result: BacktestResult = {
       summary: {
@@ -302,6 +321,7 @@ router.post('/replay', async (req, res) => {
         totalPages: Math.ceil(totalSignals / safePageSize),
       },
       signals: pagedSignals,
+      signals: allSignals,
     };
 
     res.json(result);
