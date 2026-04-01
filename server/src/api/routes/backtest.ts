@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { getDatabase } from '../../database/connection';
+import SignalBacktester from '../../strategy/SignalBacktester';
 
 const router = Router();
 
@@ -7,6 +8,7 @@ interface BacktestRequest {
   startTime: string;
   endTime: string;
   pairs?: string[];
+  mode?: 'db_signals' | 'yahoo_replay';
 }
 
 interface BacktestSignal {
@@ -160,6 +162,110 @@ router.post('/run', (req, res) => {
   } catch (error: any) {
     console.error('Backtest error:', error);
     res.status(500).json({ error: error.message || 'Backtest failed' });
+  }
+});
+
+// Replay backtest from Yahoo historical candles (signal-only, no trading execution)
+router.post('/replay', async (req, res) => {
+  try {
+    const { startTime, endTime, pairs }: BacktestRequest = req.body;
+
+    if (!startTime || !endTime) {
+      return res.status(400).json({ error: 'Start time and end time are required' });
+    }
+
+    const start = new Date(startTime);
+    const end = new Date(endTime);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start >= end) {
+      return res.status(400).json({ error: 'Invalid time range' });
+    }
+
+    const db = getDatabase();
+    let pairRows: Array<{ stock_a: string; stock_b: string }> = [];
+
+    if (pairs && pairs.length > 0) {
+      const placeholders = pairs.map(() => '?').join(',');
+      pairRows = db.prepare(`
+        SELECT stock_a, stock_b
+        FROM stock_pairs
+        WHERE (stock_a || '/' || stock_b) IN (${placeholders}) AND is_active = 1
+      `).all(...pairs) as Array<{ stock_a: string; stock_b: string }>;
+    } else {
+      pairRows = db.prepare(`
+        SELECT stock_a, stock_b
+        FROM stock_pairs
+        WHERE is_active = 1
+        LIMIT 20
+      `).all() as Array<{ stock_a: string; stock_b: string }>;
+    }
+
+    const backtester = new SignalBacktester();
+    const allSignals: BacktestSignal[] = [];
+
+    for (const pair of pairRows) {
+      const points = await backtester.runForPair(pair.stock_a, pair.stock_b, start, end);
+      allSignals.push(
+        ...points.map((p, idx) => ({
+          id: allSignals.length + idx + 1,
+          timestamp: p.timestamp,
+          stockA: p.stockA,
+          stockB: p.stockB,
+          strategyType: p.strategyType,
+          syncCorrelation: p.syncCorrelation,
+          lagCorrelation: p.lagCorrelation,
+          correlationScore: p.correlationScore,
+          volumeScoreA: p.volumeScoreA,
+          volumeScoreB: p.volumeScoreB,
+          volumeScore: p.volumeScore,
+          totalScore: p.totalScore,
+          triggered: p.triggered,
+          entryConfirmed: p.entryConfirmed,
+          leader: p.leader,
+          lagger: p.lagger,
+          leaderMove: p.leaderMove,
+          laggerMove: p.laggerMove,
+          expectedMove: p.expectedMove,
+        }))
+      );
+    }
+
+    allSignals.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+
+    const totalSignals = allSignals.length;
+    const triggeredSignals = allSignals.filter(s => s.triggered).length;
+    const confirmedSignals = allSignals.filter(s => s.entryConfirmed).length;
+    const positiveLagCount = allSignals.filter(s => s.strategyType === 'positive_lag').length;
+    const negativeCorrCount = allSignals.filter(s => s.strategyType === 'negative_corr').length;
+    const avgCorrelationScore = totalSignals > 0
+      ? allSignals.reduce((sum, s) => sum + s.correlationScore, 0) / totalSignals
+      : 0;
+    const avgVolumeScore = totalSignals > 0
+      ? allSignals.reduce((sum, s) => sum + s.volumeScore, 0) / totalSignals
+      : 0;
+    const avgTotalScore = totalSignals > 0
+      ? allSignals.reduce((sum, s) => sum + s.totalScore, 0) / totalSignals
+      : 0;
+
+    const result: BacktestResult = {
+      summary: {
+        startTime,
+        endTime,
+        totalSignals,
+        triggeredSignals,
+        confirmedSignals,
+        positiveLagCount,
+        negativeCorrCount,
+        avgCorrelationScore,
+        avgVolumeScore,
+        avgTotalScore,
+      },
+      signals: allSignals,
+    };
+
+    res.json(result);
+  } catch (error: any) {
+    console.error('Replay backtest error:', error);
+    res.status(500).json({ error: error.message || 'Replay backtest failed' });
   }
 });
 

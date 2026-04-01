@@ -1,6 +1,4 @@
-import * as yahooFinanceModules from 'yahoo-finance2/modules';
-import createYahooFinance from 'yahoo-finance2/createYahooFinance';
-import { YahooFinance } from 'yahoo-finance2';
+import yahooFinance from 'yahoo-finance2';
 
 export interface YahooQuote {
   symbol: string;
@@ -28,14 +26,11 @@ export interface HistoricalData {
  * Rate limit: ~2000 requests per hour per IP
  */
 export class YahooFinanceClient {
-  private yahooFinance: YahooFinance;
   private lastRequestTime: number = 0;
   private minRequestInterval: number = 100; // 100ms between requests
 
   constructor() {
-    // Initialize Yahoo Finance client (v3 requires instantiation with modules)
-    const YahooFinanceClass = createYahooFinance({ modules: yahooFinanceModules });
-    this.yahooFinance = new YahooFinanceClass();
+    // yahoo-finance2 default singleton client
   }
 
   /**
@@ -48,7 +43,7 @@ export class YahooFinanceClient {
       // Yahoo uses different symbol formats
       const yahooSymbol = this.normalizeSymbol(symbol);
 
-      const result: any = await this.yahooFinance.quote(yahooSymbol);
+      const result: any = await yahooFinance.quote(yahooSymbol);
 
       return {
         symbol: symbol, // Return original symbol
@@ -86,7 +81,7 @@ export class YahooFinanceClient {
         interval: interval as any,
       };
 
-      const result: any = await this.yahooFinance.chart(yahooSymbol, queryOptions);
+      const result: any = await yahooFinance.chart(yahooSymbol, queryOptions);
 
       if (!result.quotes || result.quotes.length === 0) {
         return [];
@@ -136,7 +131,7 @@ export class YahooFinanceClient {
     await this.rateLimit();
 
     try {
-      const results: any = await this.yahooFinance.search(query);
+      const results: any = await yahooFinance.search(query);
 
       return results.quotes.map((q: any) => ({
         symbol: q.symbol,
@@ -145,6 +140,43 @@ export class YahooFinanceClient {
       }));
     } catch (error) {
       console.error(`Search failed for "${query}":`, error);
+      return [];
+    }
+  }
+
+  /**
+   * Get historical data for an explicit time range
+   */
+  async getHistoricalRange(
+    symbol: string,
+    startTime: Date,
+    endTime: Date,
+    interval: string = '1m'
+  ): Promise<HistoricalData[]> {
+    await this.rateLimit();
+
+    try {
+      const yahooSymbol = this.normalizeSymbol(symbol);
+      const result: any = await yahooFinance.chart(yahooSymbol, {
+        period1: startTime,
+        period2: endTime,
+        interval: interval as any,
+      });
+
+      if (!result.quotes || result.quotes.length === 0) {
+        return [];
+      }
+
+      return result.quotes.map((item: any) => ({
+        date: new Date(item.date),
+        open: item.open,
+        high: item.high,
+        low: item.low,
+        close: item.close,
+        volume: item.volume,
+      }));
+    } catch (error) {
+      console.error(`Failed to get historical range for ${symbol}:`, error);
       return [];
     }
   }
