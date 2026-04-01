@@ -7,7 +7,7 @@ const showError = ref(false);
 const errorMessage = ref('');
 
 // Filter state
-const showTriggeredOnly = ref(false);
+const showTriggeredOnly = ref(true);
 const page = ref(1);
 const pageSize = ref(100);
 
@@ -28,7 +28,7 @@ const runBacktest = async (resetPage: boolean = true) => {
   isLoading.value = true;
   showError.value = false;
   backtestResult.value = null;
-  showTriggeredOnly.value = false; // Default to all signals to avoid empty-table confusion
+  showTriggeredOnly.value = true; // Reset filter to show triggered only
   if (resetPage) {
     page.value = 1;
   }

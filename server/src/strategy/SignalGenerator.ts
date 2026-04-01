@@ -85,27 +85,8 @@ export class SignalGenerator {
     // Calculate average volumes
     const volumesA = historyA.slice(-this.lookbackPoints).map(h => h.volume);
     const volumesB = historyB.slice(-this.lookbackPoints).map(h => h.volume);
-    let avgVolumeA = volumesA.reduce((a, b) => a + b, 0) / volumesA.length || 0;
-    let avgVolumeB = volumesB.reduce((a, b) => a + b, 0) / volumesB.length || 0;
-    let currentVolumeA = latestA.volume;
-    let currentVolumeB = latestB.volume;
-
-    // Yahoo forex symbols often have missing/zero volume.
-    // Fallback to return-activity proxy so ratio/score can still vary.
-    if (avgVolumeA <= 0 || currentVolumeA <= 0) {
-      const absReturnsA = returnsA.map(r => Math.abs(r));
-      const avgAbsA = absReturnsA.reduce((sum, v) => sum + v, 0) / absReturnsA.length || 0;
-      const currentAbsA = absReturnsA[absReturnsA.length - 1] || 0;
-      avgVolumeA = avgAbsA * 1_000_000;
-      currentVolumeA = currentAbsA * 1_000_000;
-    }
-    if (avgVolumeB <= 0 || currentVolumeB <= 0) {
-      const absReturnsB = returnsB.map(r => Math.abs(r));
-      const avgAbsB = absReturnsB.reduce((sum, v) => sum + v, 0) / absReturnsB.length || 0;
-      const currentAbsB = absReturnsB[absReturnsB.length - 1] || 0;
-      avgVolumeB = avgAbsB * 1_000_000;
-      currentVolumeB = currentAbsB * 1_000_000;
-    }
+    const avgVolumeA = volumesA.reduce((a, b) => a + b, 0) / volumesA.length || 1;
+    const avgVolumeB = volumesB.reduce((a, b) => a + b, 0) / volumesB.length || 1;
 
     // Calculate score
     const score = this.scoringEngine.calculatePairScore(
