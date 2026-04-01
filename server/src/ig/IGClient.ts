@@ -106,13 +106,13 @@ export class IGClient {
         },
       });
 
-      // 从响应 headers 中提取 CST 和 X-SECURITY-TOKEN
+      // Extract CST and X-SECURITY-TOKEN from response headers
       this.cstToken = response.headers['cst'] || '';
       this.securityToken = response.headers['x-security-token'] || '';
       this.authToken = response.data.oauthToken?.access_token || '';
 
       if (!this.cstToken || !this.securityToken) {
-        throw new Error('登录成功，但未能获取 CST 或 X-SECURITY-TOKEN');
+        throw new Error('Login succeeded, but CST or X-SECURITY-TOKEN was missing');
       }
 
       this.isAuthenticated = true;
