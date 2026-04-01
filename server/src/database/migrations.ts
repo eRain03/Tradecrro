@@ -1,7 +1,7 @@
 import { getDatabase } from './connection';
 
 const MIGRATIONS = [
-  // 股票配对表
+  // Stock pair table
   `
   CREATE TABLE IF NOT EXISTS stock_pairs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -12,7 +12,19 @@ const MIGRATIONS = [
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
   `,
-  // 价格数据表
+  `
+  DELETE FROM stock_pairs
+  WHERE id NOT IN (
+    SELECT MIN(id)
+    FROM stock_pairs
+    GROUP BY stock_a, stock_b
+  );
+  `,
+  `
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_stock_pairs_unique_pair
+  ON stock_pairs(stock_a, stock_b);
+  `,
+  // Price data table
   `
   CREATE TABLE IF NOT EXISTS price_data (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -24,11 +36,11 @@ const MIGRATIONS = [
       UNIQUE(symbol, timestamp)
   );
   `,
-  // 价格数据索引
+  // Price data index
   `
   CREATE INDEX IF NOT EXISTS idx_price_symbol_time ON price_data(symbol, timestamp);
   `,
-  // 信号记录表
+  // Signal table
   `
   CREATE TABLE IF NOT EXISTS signals (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -55,7 +67,7 @@ const MIGRATIONS = [
       lagger TEXT
   );
   `,
-  // 交易记录表
+  // Trade table
   `
   CREATE TABLE IF NOT EXISTS trades (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -75,7 +87,7 @@ const MIGRATIONS = [
       is_simulated INTEGER DEFAULT 1
   );
   `,
-  // 系统日志表
+  // System log table
   `
   CREATE TABLE IF NOT EXISTS system_logs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -86,7 +98,7 @@ const MIGRATIONS = [
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
   `,
-  // 配置表
+  // Settings table
   `
   CREATE TABLE IF NOT EXISTS settings (
       key TEXT PRIMARY KEY,

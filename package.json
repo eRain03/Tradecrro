@@ -1,7 +1,7 @@
 {
   "name": "statistical-arbitrage-trading-system",
   "version": "1.0.0",
-  "description": "基于统计套利的自动化期权交易系统 - Vue + Node.js + IG Markets",
+  "description": "Automated statistical-arbitrage options trading system - Vue + Node.js + IG Markets",
   "private": true,
   "workspaces": [
     "client",
