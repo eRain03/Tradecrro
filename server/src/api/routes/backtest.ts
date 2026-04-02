@@ -291,8 +291,13 @@ router.post('/replay', async (req, res) => {
     const allSignals: BacktestSignal[] = [];
     let nextSignalId = 1;
 
-    for (const pair of pairRows) {
-      const points = await backtester.runForPair(pair.stock_a, pair.stock_b, start, end);
+    const promises = pairRows.map(pair =>
+      backtester.runForPair(pair.stock_a, pair.stock_b, start, end)
+    );
+
+    const results = await Promise.all(promises);
+
+    for (const points of results) {
       for (const p of points) {
         allSignals.push({
           id: nextSignalId++,
@@ -399,7 +404,6 @@ router.post('/replay-stream', async (req, res) => {
 
     const backtester = new SignalBacktester();
     const allSignals: BacktestSignal[] = [];
-    let nextSignalId = 1;
 
     const pairSubProgress = (
       pairIndex: number,
@@ -418,8 +422,7 @@ router.post('/replay-stream', async (req, res) => {
       return Math.min(99, Math.round(((pairIndex + sub) / totalPairs) * 100));
     };
 
-    for (let i = 0; i < pairRows.length; i++) {
-      const pair = pairRows[i];
+    const promises = pairRows.map((pair, i) => (async () => {
       const pairStartPct = Math.max(
         1,
         Math.min(99, Math.round((i / pairRows.length) * 100))
@@ -464,6 +467,25 @@ router.post('/replay-stream', async (req, res) => {
         },
       });
 
+      write({
+        type: 'progress',
+        step: 'pair_done',
+        current: i + 1,
+        total: pairRows.length,
+        stockA: pair.stock_a,
+        stockB: pair.stock_b,
+        cumulativeSignals: allSignals.length,
+        lastPairSignalCount: points.length,
+        elapsedSec: Math.round((Date.now() - t0) / 1000),
+        percentApprox: Math.round(((i + 1) / pairRows.length) * 100),
+      });
+
+      return points;
+    })());
+
+    const results = await Promise.all(promises);
+    let nextSignalId = 1;
+    for (const points of results) {
       for (const p of points) {
         allSignals.push({
           id: nextSignalId++,
@@ -487,19 +509,6 @@ router.post('/replay-stream', async (req, res) => {
           expectedMove: p.expectedMove,
         });
       }
-
-      write({
-        type: 'progress',
-        step: 'pair_done',
-        current: i + 1,
-        total: pairRows.length,
-        stockA: pair.stock_a,
-        stockB: pair.stock_b,
-        cumulativeSignals: allSignals.length,
-        lastPairSignalCount: points.length,
-        elapsedSec: Math.round((Date.now() - t0) / 1000),
-        percentApprox: Math.round(((i + 1) / pairRows.length) * 100),
-      });
     }
 
     allSignals.sort((a, b) => b.timestamp.localeCompare(a.timestamp));

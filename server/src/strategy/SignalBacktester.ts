@@ -63,12 +63,13 @@ export class SignalBacktester {
     const onProgress = options?.onProgress;
 
     onProgress?.({ kind: 'symbol_start', stockA, stockB, symbol: stockA });
-    const historyA = await this.historical.getHistoricalRange(
-      stockA,
-      startTime,
-      endTime,
-      this.yahooInterval
-    );
+    onProgress?.({ kind: 'symbol_start', stockA, stockB, symbol: stockB });
+
+    const [historyA, historyB] = await Promise.all([
+      this.historical.getHistoricalRange(stockA, startTime, endTime, this.yahooInterval),
+      this.historical.getHistoricalRange(stockB, startTime, endTime, this.yahooInterval),
+    ]);
+
     onProgress?.({
       kind: 'symbol_done',
       stockA,
@@ -76,14 +77,6 @@ export class SignalBacktester {
       symbol: stockA,
       barCount: historyA.length,
     });
-
-    onProgress?.({ kind: 'symbol_start', stockA, stockB, symbol: stockB });
-    const historyB = await this.historical.getHistoricalRange(
-      stockB,
-      startTime,
-      endTime,
-      this.yahooInterval
-    );
     onProgress?.({
       kind: 'symbol_done',
       stockA,

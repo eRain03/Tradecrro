@@ -14,11 +14,19 @@ export class DatabentoHistorical {
   private readonly pythonBin: string;
   private readonly scriptPath: string;
   private readonly dataset: string;
+  private cache = new Map<string, HistoricalData[]>();
 
   constructor() {
     this.pythonBin = config.databento.python;
     this.dataset = config.databento.dataset;
     this.scriptPath = path.join(__dirname, '../../scripts/databento_ohlcv.py');
+  }
+
+  /**
+   * Clear cache for a new backtest session.
+   */
+  clearCache(): void {
+    this.cache.clear();
   }
 
   /**
@@ -31,6 +39,13 @@ export class DatabentoHistorical {
     _interval: string = '1m'
   ): Promise<HistoricalData[]> {
     const raw = symbol.trim();
+    const cacheKey = `${raw}:${startTime.getTime()}:${endTime.getTime()}`;
+
+    if (this.cache.has(cacheKey)) {
+      console.log(`[Databento] 命中缓存: ${raw}`);
+      return this.cache.get(cacheKey)!;
+    }
+
     if (raw.includes('/')) {
       throw new Error(
         'Databento 回测当前仅支持美股 raw 代码（如 AAPL），不支持外汇对写法（如 EUR/USD）。'
@@ -89,7 +104,7 @@ export class DatabentoHistorical {
 
     console.log(`[Databento] ${raw} 解析完成，共 ${rows.length} 根 K 线`);
 
-    return rows.map((r) => ({
+    const resultData = rows.map((r) => ({
       date: new Date(r.date),
       open: this.fin(r.open),
       high: this.fin(r.high),
@@ -97,6 +112,9 @@ export class DatabentoHistorical {
       close: this.fin(r.close),
       volume: this.fin(r.volume),
     }));
+
+    this.cache.set(cacheKey, resultData);
+    return resultData;
   }
 
   private fin(v: number): number {
