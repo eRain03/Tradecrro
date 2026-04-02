@@ -20,7 +20,6 @@ function getReplayPairRows(
     SELECT stock_a, stock_b
     FROM stock_pairs
     WHERE is_active = 1
-    LIMIT 20
   `).all() as Array<{ stock_a: string; stock_b: string }>;
 }
 

@@ -6,6 +6,7 @@ import { runMigrations } from './database/migrations';
 import { seedData } from './database/seed';
 import UnifiedDataFetcher from './data/UnifiedDataFetcher';
 import SignalGenerator from './strategy/SignalGenerator';
+import { AIPairMiner } from './core/ai/AIPairMiner';
 
 // Import routes
 import pairsRoutes from './api/routes/pairs';
@@ -91,6 +92,10 @@ app.listen(PORT, () => {
 
   // Start data fetching after server is ready
   startDataFetching();
+
+  // Start AI Pair Miner
+  const miner = new AIPairMiner(dataFetcher);
+  miner.start();
 });
 
 export default app;

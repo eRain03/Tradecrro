@@ -62,7 +62,7 @@ export class IGClient {
   private cstToken: string = '';
   private securityToken: string = '';
   private authToken: string = '';
-  private isDemo: boolean;
+  private isDemo: boolean = true;
   private isAuthenticated: boolean = false;
 
   constructor() {

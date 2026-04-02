@@ -44,6 +44,7 @@ export class UnifiedDataFetcher {
   private isRunning: boolean = false;
   private intervalId: NodeJS.Timeout | null = null;
   private readonly lookbackPoints: number;
+  private activeSymbols: Set<string> = new Set();
 
   // Per-symbol random state for independent randomness
   private symbolRandomStates: Map<string, number> = new Map();
@@ -72,6 +73,23 @@ export class UnifiedDataFetcher {
   }
 
   /**
+   * Add new symbols dynamically
+   */
+  async addSymbols(symbols: string[]): Promise<void> {
+    const newSymbols = symbols.filter(s => s && s.trim() && !this.activeSymbols.has(s));
+    if (newSymbols.length === 0) return;
+
+    for (const symbol of newSymbols) {
+      this.activeSymbols.add(symbol);
+    }
+    
+    console.log(`📈 Dynamically fetching historical data for ${newSymbols.length} new symbols...`);
+    for (const symbol of newSymbols) {
+      await this.fetchHistoricalData(symbol);
+    }
+  }
+
+  /**
    * Start fetching data for symbols
    */
   async startFetching(symbols: string[]): Promise<void> {
@@ -89,16 +107,20 @@ export class UnifiedDataFetcher {
       console.warn(`⚠️ Removed ${symbols.length - uniqueSymbols.length} duplicate symbols`);
     }
 
-    // Fetch initial historical data
-    console.log(`📈 Fetching historical data for ${uniqueSymbols.length} unique symbols...`);
     for (const symbol of uniqueSymbols) {
+      this.activeSymbols.add(symbol);
+    }
+
+    // Fetch initial historical data
+    console.log(`📈 Fetching historical data for ${this.activeSymbols.size} unique symbols...`);
+    for (const symbol of this.activeSymbols) {
       await this.fetchHistoricalData(symbol);
     }
 
     // Start polling
     const intervalMs = config.trading.samplingInterval * 1000;
     this.intervalId = setInterval(async () => {
-      for (const symbol of uniqueSymbols) {
+      for (const symbol of this.activeSymbols) {
         await this.fetchCurrentPrice(symbol);
       }
     }, intervalMs);
