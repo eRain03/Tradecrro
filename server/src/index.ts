@@ -14,8 +14,12 @@ import signalsRoutes from './api/routes/signals';
 import tradesRoutes from './api/routes/trades';
 import settingsRoutes from './api/routes/settings';
 import backtestRoutes from './api/routes/backtest';
+import { wsService } from './api/websocket';
 
 const app = express();
+
+// Initialize WebSocket server
+wsService.initialize();
 
 // Middleware
 app.use(cors());

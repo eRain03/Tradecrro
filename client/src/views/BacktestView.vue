@@ -8,12 +8,12 @@ const backtestResult = ref<BacktestResult | null>(null);
 const showError = ref(false);
 const errorMessage = ref('');
 
-/** 数据库分页查询 vs 行情重放（Databento / Yahoo，全量拉取后前端按 100 条分页） */
+/** Database paginated query vs market replay (Databento / Yahoo, frontend pagination with 100 items per page after fetching all data) */
 const backtestMode = ref<'db' | 'replay'>('db');
 const replayPage = ref(1);
 const replaySignalsFull = ref<BacktestResult['signals']>([]);
 
-// Filter state（数据库模式会传给后端；重放模式在前端过滤后再分页）
+// Filter state (database mode passes to backend; replay mode filters in frontend then paginates)
 const showTriggeredOnly = ref(true);
 
 // Form state
@@ -57,14 +57,14 @@ const getRangeBody = () => {
   };
 };
 
-/** 与 src/api/http.ts 一致；开发时直连后端，避免 Vite 代理缓冲 NDJSON 流导致进度不刷新 */
+/** Same as src/api/http.ts; connects directly to backend during development to avoid Vite proxy buffering NDJSON streams and preventing progress updates */
 function resolveApiBase(): string {
   const url = (import.meta.env.VITE_API_URL as string | undefined)?.trim();
   if (url) return url.replace(/\/$/, '');
   return import.meta.env.DEV ? 'http://localhost:3001' : '';
 }
 
-/** 数据库：服务端分页，每页最多 100 条 */
+/** Database: server-side pagination, max 100 items per page */
 const fetchDbPage = async (page: number) => {
   const body = {
     ...getRangeBody(),
@@ -122,7 +122,7 @@ const replayProgress = ref<{
   detail: string;
 } | null>(null);
 
-/** 行情重放：NDJSON 流式进度 + 配置 DATABENTO_API_KEY 时后端用 Databento */
+/** Market replay: NDJSON streaming progress + uses Databento when DATABENTO_API_KEY is configured */
 const fetchReplay = async () => {
   replayProgress.value = {
     totalPairs: 0,
@@ -133,7 +133,7 @@ const fetchReplay = async () => {
     elapsedSec: 0,
     percentApprox: 0,
     step: 'connecting',
-    detail: '连接服务器…',
+    detail: 'Connecting to server…',
   };
 
   const streamUrl = `${resolveApiBase()}/api/backtest/replay-stream`;
@@ -150,7 +150,7 @@ const fetchReplay = async () => {
 
   const reader = response.body?.getReader();
   if (!reader) {
-    throw new Error('浏览器不支持流式响应');
+    throw new Error('Browser does not support streaming response');
   }
 
   const decoder = new TextDecoder();
@@ -161,21 +161,21 @@ const fetchReplay = async () => {
     let detail = '';
     if (msg.step === 'pair_start') {
       detail =
-        '开始该交易对：将依次拉取两只标的 K 线（Databento 单次请求可能需 1～5 分钟，请看终端 [Databento] 日志）';
+        'Starting this pair: will fetch K-lines for both symbols (Databento single request may take 1-5 minutes, check terminal [Databento] logs)';
     } else if (msg.step === 'symbol') {
       if (msg.subStep === 'symbol_start') {
-        detail = `正在请求 Databento：${msg.symbol ?? ''}（Python 子进程）…`;
+        detail = `Requesting Databento: ${msg.symbol ?? ''} (Python subprocess)…`;
       } else if (msg.subStep === 'symbol_done') {
-        detail = `${msg.symbol ?? ''} 已返回 ${msg.barCount ?? 0} 根 1m K 线`;
+        detail = `${msg.symbol ?? ''} returned ${msg.barCount ?? 0} 1m K-lines`;
       } else if (msg.subStep === 'compute') {
-        detail = '正在计算相关性、成交量分数与信号…';
+        detail = 'Computing correlation, volume scores and signals…';
       } else {
-        detail = '处理中…';
+        detail = 'Processing…';
       }
     } else if (msg.step === 'pair_done') {
-      detail = `本对已完成，生成 ${msg.lastPairSignalCount ?? 0} 条时间点信号`;
+      detail = `Pair completed, generated ${msg.lastPairSignalCount ?? 0} timestamp signals`;
     } else {
-      detail = '处理中…';
+      detail = 'Processing…';
     }
     replayProgress.value = {
       totalPairs: msg.total,
@@ -209,7 +209,7 @@ const fetchReplay = async () => {
           elapsedSec: 0,
           percentApprox: 0,
           step: 'start',
-          detail: `共 ${msg.totalPairs} 对交易对，开始逐对回测…`,
+          detail: `Total ${msg.totalPairs} pairs, starting backtest one by one…`,
         };
       } else if (msg.type === 'progress') {
         applyProgress(msg);
@@ -328,9 +328,9 @@ const formatTime = (timestamp: string) => {
 };
 
 const getStrategyTypeLabel = (strategyType: string | null) => {
-  if (strategyType === 'positive_lag') return '正相关 (滞后)';
-  if (strategyType === 'negative_corr') return '负相关 (同步)';
-  return '未触发';
+  if (strategyType === 'positive_lag') return 'Positive Correlation (Lag)';
+  if (strategyType === 'negative_corr') return 'Negative Correlation (Sync)';
+  return 'Not Triggered';
 };
 
 const getStrategyTypeClass = (strategyType: string | null) => {
@@ -349,10 +349,10 @@ const tableSignals = computed(() => {
 const listTitleExtra = computed(() => {
   if (backtestMode.value === 'db' && backtestResult.value?.pagination) {
     const { page, totalPages, total } = backtestResult.value.pagination;
-    return `第 ${page}/${totalPages || 1} 页 · 本条件共 ${total} 条`;
+    return `Page ${page}/${totalPages || 1} · Total: ${total} signals`;
   }
   if (backtestMode.value === 'replay' && replaySignalsFull.value.length > 0) {
-    return `第 ${replayPage.value}/${replayTotalPages.value} 页 · 本页最多 ${PAGE_SIZE} 条（前端分页）`;
+    return `Page ${replayPage.value}/${replayTotalPages.value} · Up to ${PAGE_SIZE} per page (frontend pagination)`;
   }
   return '';
 });
@@ -405,7 +405,7 @@ interface BacktestResult {
     <div class="view-header">
       <h1>
         <span class="title-separator">◆</span>
-        回测
+        BACKTEST
         <span class="title-separator">◆</span>
       </h1>
     </div>
@@ -413,38 +413,38 @@ interface BacktestResult {
     <!-- Configuration Form -->
     <div class="config-card">
       <div class="form-section">
-        <h3>时间范围</h3>
+        <h3>Time Range</h3>
         <div class="date-range">
           <div class="date-field">
-            <label>开始日期</label>
+            <label>Start Date</label>
             <input type="date" v-model="startDate" />
           </div>
           <div class="date-field">
-            <label>开始时间</label>
+            <label>Start Time</label>
             <input type="time" v-model="startTime" />
           </div>
           <div class="separator">→</div>
           <div class="date-field">
-            <label>结束日期</label>
+            <label>End Date</label>
             <input type="date" v-model="endDate" />
           </div>
           <div class="date-field">
-            <label>结束时间</label>
+            <label>End Time</label>
             <input type="time" v-model="endTime" />
           </div>
         </div>
       </div>
 
       <div class="form-section mode-section">
-        <h3>数据源</h3>
+        <h3>Data Source</h3>
         <div class="mode-row">
           <label class="mode-option">
             <input type="radio" value="db" v-model="backtestMode" />
-            <span>数据库信号（分页查询，每页 {{ PAGE_SIZE }} 条）</span>
+            <span>Database Signals (paginated, {{ PAGE_SIZE }} per page)</span>
           </label>
           <label class="mode-option">
             <input type="radio" value="replay" v-model="backtestMode" />
-            <span>行情重放（配置 DATABENTO_API_KEY 时用 Databento，否则 Yahoo；结果前端分页）</span>
+            <span>Market Replay (Databento if DATABENTO_API_KEY configured, otherwise Yahoo; results paginated in frontend)</span>
           </label>
         </div>
       </div>
@@ -452,7 +452,7 @@ interface BacktestResult {
       <div class="form-actions">
         <button class="run-btn" @click="runBacktest" :disabled="isLoading">
           <span class="btn-icon">{{ isLoading ? '⏳' : '▶' }}</span>
-          <span class="btn-text">{{ isLoading ? '回测中...' : '运行回测' }}</span>
+          <span class="btn-text">{{ isLoading ? 'Running Backtest...' : 'Run Backtest' }}</span>
         </button>
       </div>
     </div>
@@ -468,29 +468,29 @@ interface BacktestResult {
       <template v-if="backtestMode === 'replay' && replayProgress">
         <div class="replay-progress-top">
           <span class="loading-spinner">⏳</span>
-          <span class="replay-title">行情重放回测</span>
+          <span class="replay-title">Market Replay Backtest</span>
         </div>
         <div class="progress-track" role="progressbar" :aria-valuenow="replayProgress.percentApprox" aria-valuemin="0" aria-valuemax="100">
           <div class="progress-fill" :style="{ width: `${replayProgress.percentApprox}%` }" />
         </div>
         <p class="replay-percent">{{ replayProgress.percentApprox }}%</p>
         <p class="replay-main">
-          第 <strong>{{ replayProgress.current }}</strong> / {{ replayProgress.totalPairs }} 对
+          Pair <strong>{{ replayProgress.current }}</strong> / {{ replayProgress.totalPairs }}
           <span v-if="replayProgress.pairLabel" class="replay-pair"> · {{ replayProgress.pairLabel }}</span>
         </p>
         <p class="replay-stats">
-          累计信号 <strong>{{ replayProgress.cumulativeSignals }}</strong> 条
+          Total signals: <strong>{{ replayProgress.cumulativeSignals }}</strong>
           <span v-if="replayProgress.step === 'pair_done' && replayProgress.lastPairSignalCount">
-            · 本对 +{{ replayProgress.lastPairSignalCount }}
+            · This pair +{{ replayProgress.lastPairSignalCount }}
           </span>
-          · 已用时 <strong>{{ replayProgress.elapsedSec }}</strong> 秒
+          · Elapsed: <strong>{{ replayProgress.elapsedSec }}</strong>s
         </p>
         <p class="loading-sub replay-detail">{{ replayProgress.detail }}</p>
       </template>
       <template v-else>
         <span class="loading-spinner">⏳</span>
-        <p>正在回测...</p>
-        <p class="loading-sub">分析历史信号数据</p>
+        <p>Running backtest...</p>
+        <p class="loading-sub">Analyzing historical signal data</p>
       </template>
     </div>
 
@@ -499,39 +499,39 @@ interface BacktestResult {
       <!-- Summary Cards -->
       <div class="summary-grid">
         <div class="summary-card highlight">
-          <div class="summary-label">总信号数</div>
+          <div class="summary-label">Total Signals</div>
           <div class="summary-value">{{ backtestResult.summary.totalSignals }}</div>
-          <div class="summary-sub">时间范围内</div>
+          <div class="summary-sub">Within time range</div>
         </div>
 
         <div class="summary-card">
-          <div class="summary-label">触发信号</div>
+          <div class="summary-label">Triggered Signals</div>
           <div class="summary-value">{{ backtestResult.summary.triggeredSignals }}</div>
-          <div class="summary-sub">总分≥87</div>
+          <div class="summary-sub">Total score ≥ 87</div>
         </div>
 
         <div class="summary-card">
-          <div class="summary-label">已确认入场</div>
+          <div class="summary-label">Entry Confirmed</div>
           <div class="summary-value">{{ backtestResult.summary.confirmedSignals }}</div>
-          <div class="summary-sub">满足入场条件</div>
+          <div class="summary-sub">Entry conditions met</div>
         </div>
 
         <div class="summary-card">
-          <div class="summary-label">正相关策略</div>
+          <div class="summary-label">Positive Correlation</div>
           <div class="summary-value">{{ backtestResult.summary.positiveLagCount }}</div>
-          <div class="summary-sub">领先/滞后</div>
+          <div class="summary-sub">Leader/Lag strategy</div>
         </div>
 
         <div class="summary-card">
-          <div class="summary-label">负相关策略</div>
+          <div class="summary-label">Negative Correlation</div>
           <div class="summary-value">{{ backtestResult.summary.negativeCorrCount }}</div>
-          <div class="summary-sub">同步联动</div>
+          <div class="summary-sub">Synchronized strategy</div>
         </div>
 
         <div class="summary-card">
-          <div class="summary-label">平均总分</div>
+          <div class="summary-label">Avg Total Score</div>
           <div class="summary-value">{{ backtestResult.summary.avgTotalScore.toFixed(1) }}</div>
-          <div class="summary-sub">所有信号平均</div>
+          <div class="summary-sub">Average of all signals</div>
         </div>
       </div>
 
@@ -539,7 +539,7 @@ interface BacktestResult {
       <div class="signals-card">
         <div class="table-header">
           <h3>
-            信号列表 <span class="list-hint">({{ tableSignals.length }} 条)</span>
+            Signal List <span class="list-hint">({{ tableSignals.length }} signals)</span>
             <span v-if="listTitleExtra" class="list-hint">· {{ listTitleExtra }}</span>
           </h3>
           <button
@@ -548,22 +548,22 @@ interface BacktestResult {
             @click="toggleTriggeredOnly"
           >
             <span class="filter-icon">{{ showTriggeredOnly ? '✓' : '○' }}</span>
-            <span class="filter-text">只显示触发信号</span>
-            <span class="filter-count">(触发：{{ backtestResult.summary.triggeredSignals }} / 总计：{{ backtestResult.summary.totalSignals }})</span>
+            <span class="filter-text">Triggered Only</span>
+            <span class="filter-count">(Triggered: {{ backtestResult.summary.triggeredSignals }} / Total: {{ backtestResult.summary.totalSignals }})</span>
           </button>
         </div>
         <div class="signals-table-container">
           <table v-if="tableSignals.length > 0">
             <thead>
               <tr>
-                <th>时间</th>
-                <th>交易对</th>
-                <th>策略类型</th>
-                <th>相关性分数</th>
-                <th>成交量分数</th>
-                <th>总分</th>
-                <th>领先/滞后</th>
-                <th>状态</th>
+                <th>Time</th>
+                <th>Pair</th>
+                <th>Strategy Type</th>
+                <th>Correlation Score</th>
+                <th>Volume Score</th>
+                <th>Total Score</th>
+                <th>Leader/Lagger</th>
+                <th>Status</th>
               </tr>
             </thead>
             <tbody>
@@ -600,11 +600,11 @@ interface BacktestResult {
                   <span v-if="signal.strategyType === 'positive_lag'">
                     {{ signal.leader }} → {{ signal.lagger }}
                   </span>
-                  <span v-else>同步</span>
+                  <span v-else>Sync</span>
                 </td>
                 <td>
                   <span class="status-badge" :class="{ 'triggered': signal.triggered }">
-                    {{ signal.triggered ? '可交易' : '观察中' }}
+                    {{ signal.triggered ? 'Tradable' : 'Watching' }}
                   </span>
                 </td>
               </tr>
@@ -612,7 +612,7 @@ interface BacktestResult {
           </table>
           <div v-else class="no-signals">
             <span class="no-signals-icon">∅</span>
-            <p>{{ showTriggeredOnly ? '本页无触发信号（可关闭「只显示触发」）' : '暂无信号' }}</p>
+            <p>{{ showTriggeredOnly ? 'No triggered signals on this page (try disabling "Triggered Only" filter)' : 'No signals' }}</p>
           </div>
         </div>
 
@@ -623,7 +623,7 @@ interface BacktestResult {
             :disabled="isLoading || backtestResult.pagination.page <= 1"
             @click="goToDbPage(backtestResult.pagination.page - 1)"
           >
-            上一页
+            Previous
           </button>
           <span class="page-info">
             {{ backtestResult.pagination.page }} / {{ backtestResult.pagination.totalPages || 1 }}
@@ -634,7 +634,7 @@ interface BacktestResult {
             :disabled="isLoading || backtestResult.pagination.page >= backtestResult.pagination.totalPages"
             @click="goToDbPage(backtestResult.pagination.page + 1)"
           >
-            下一页
+            Next
           </button>
         </div>
 
@@ -645,7 +645,7 @@ interface BacktestResult {
             :disabled="replayPage <= 1"
             @click="goToReplayPage(replayPage - 1)"
           >
-            上一页
+            Previous
           </button>
           <span class="page-info">{{ replayPage }} / {{ replayTotalPages }}</span>
           <button
@@ -654,7 +654,7 @@ interface BacktestResult {
             :disabled="replayPage >= replayTotalPages"
             @click="goToReplayPage(replayPage + 1)"
           >
-            下一页
+            Next
           </button>
         </div>
       </div>
