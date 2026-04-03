@@ -362,7 +362,7 @@ router.post('/replay', async (req, res) => {
   }
 });
 
-/** 行情重放 NDJSON 流：按交易对推送进度，最后一行 type=complete */
+/** 行情重放 NDJSON 流：实时推送信号 */
 router.post('/replay-stream', async (req, res) => {
   const { startTime, endTime, pairs }: BacktestRequest = req.body;
 
@@ -382,6 +382,27 @@ router.post('/replay-stream', async (req, res) => {
   res.setHeader('Connection', 'keep-alive');
 
   const write = (obj: object) => ndjsonWrite(res, obj);
+
+  // Track if client disconnected - use response writable state instead of request close event
+  // Note: req.on('close') can be triggered spuriously during async operations
+  const isClientConnected = () => !res.writableEnded && res.writable;
+
+  // Heartbeat: send keepalive every 3 seconds to prevent timeout
+  let heartbeatTimer: NodeJS.Timeout | null = null;
+  const startHeartbeat = () => {
+    if (heartbeatTimer) return;
+    heartbeatTimer = setInterval(() => {
+      if (isClientConnected()) {
+        write({ type: 'heartbeat', timestamp: new Date().toISOString() });
+      }
+    }, 3000);
+  };
+  const stopHeartbeat = () => {
+    if (heartbeatTimer) {
+      clearInterval(heartbeatTimer);
+      heartbeatTimer = null;
+    }
+  };
 
   try {
     const db = getDatabase();
@@ -403,49 +424,58 @@ router.post('/replay-stream', async (req, res) => {
 
     const backtester = new SignalBacktester();
     const allSignals: BacktestSignal[] = [];
+    let nextSignalId = 1;
 
-    const pairSubProgress = (
-      pairIndex: number,
-      pair: { stock_a: string; stock_b: string },
-      totalPairs: number,
-      e: RunForPairProgressEvent
-    ): number => {
-      let sub = 0.02;
-      if (e.kind === 'symbol_start') {
-        sub = e.symbol === pair.stock_a ? 0.08 : 0.22;
-      } else if (e.kind === 'symbol_done') {
-        sub = e.symbol === pair.stock_a ? 0.18 : 0.38;
-      } else if (e.kind === 'compute') {
-        sub = 0.48;
-      }
-      return Math.min(99, Math.round(((pairIndex + sub) / totalPairs) * 100));
-    };
+    // Process pairs SEQUENTIALLY to stream signals in real-time
+    for (let i = 0; i < pairRows.length; i++) {
+      const pair = pairRows[i];
+      const pairStartPct = Math.round((i / pairRows.length) * 100);
 
-    const promises = pairRows.map((pair, i) => (async () => {
-      const pairStartPct = Math.max(
-        1,
-        Math.min(99, Math.round((i / pairRows.length) * 100))
-      );
+      // Start heartbeat before fetching data (Databento may take minutes)
+      startHeartbeat();
+
       write({
         type: 'progress',
         step: 'pair_start',
-        current: i + 1,
-        total: pairRows.length,
-        stockA: pair.stock_a,
-        stockB: pair.stock_b,
-        cumulativeSignals: allSignals.length,
-        elapsedSec: Math.round((Date.now() - t0) / 1000),
-        percentApprox: pairStartPct,
-      });
-      console.log(
-        `[replay-stream] 交易对 ${i + 1}/${pairRows.length} 开始 ${pair.stock_a}/${pair.stock_b}`
-      );
+          current: i + 1,
+          total: pairRows.length,
+          stockA: pair.stock_a,
+          stockB: pair.stock_b,
+          cumulativeSignals: allSignals.length,
+          elapsedSec: Math.round((Date.now() - t0) / 1000),
+          percentApprox: pairStartPct,
+        });
 
-      let points: any[] = [];
+      console.log(`[replay-stream] 交易对 ${i + 1}/${pairRows.length} 开始 ${pair.stock_a}/${pair.stock_b}`);
+
       try {
-        points = await backtester.runForPair(pair.stock_a, pair.stock_b, start, end, {
+        const points = await backtester.runForPair(pair.stock_a, pair.stock_b, start, end, {
           onProgress: (e) => {
-            const pct = pairSubProgress(i, pair, pairRows.length, e);
+            // Handle heartbeat: just send a keepalive message without changing progress
+            if (e.kind === 'heartbeat') {
+              write({
+                type: 'progress',
+                step: 'heartbeat',
+                current: i + 1,
+                total: pairRows.length,
+                stockA: pair.stock_a,
+                stockB: pair.stock_b,
+                cumulativeSignals: allSignals.length,
+                elapsedSec: Math.round((Date.now() - t0) / 1000),
+                percentApprox: Math.round(((i + 0.1) / pairRows.length) * 100),
+              });
+              return;
+            }
+
+            let sub = 0.02;
+            if (e.kind === 'symbol_start') {
+              sub = e.symbol === pair.stock_a ? 0.08 : 0.22;
+            } else if (e.kind === 'symbol_done') {
+              sub = e.symbol === pair.stock_a ? 0.18 : 0.38;
+            } else if (e.kind === 'compute') {
+              sub = 0.48;
+            }
+            const pct = Math.min(99, Math.round(((i + sub) / pairRows.length) * 100));
             write({
               type: 'progress',
               step: 'symbol',
@@ -460,13 +490,62 @@ router.post('/replay-stream', async (req, res) => {
               elapsedSec: Math.round((Date.now() - t0) / 1000),
               percentApprox: pct,
             });
-            console.log(
-              `[replay-stream]   ${pair.stock_a}/${pair.stock_b} → ${e.kind}` +
-                (e.symbol ? ` ${e.symbol}` : '') +
-                (e.barCount != null ? ` bars=${e.barCount}` : '')
-            );
           },
         });
+
+        // Stream signals immediately as they are computed
+        const newSignals: BacktestSignal[] = [];
+        for (const p of points) {
+          const signal: BacktestSignal = {
+            id: nextSignalId++,
+            timestamp: p.timestamp,
+            stockA: p.stockA,
+            stockB: p.stockB,
+            strategyType: p.strategyType,
+            syncCorrelation: p.syncCorrelation,
+            lagCorrelation: p.lagCorrelation,
+            correlationScore: p.correlationScore,
+            volumeScoreA: p.volumeScoreA,
+            volumeScoreB: p.volumeScoreB,
+            volumeScore: p.volumeScore,
+            totalScore: p.totalScore,
+            triggered: p.triggered,
+            entryConfirmed: p.entryConfirmed,
+            leader: p.leader,
+            lagger: p.lagger,
+            leaderMove: p.leaderMove,
+            laggerMove: p.laggerMove,
+            expectedMove: p.expectedMove,
+          };
+          newSignals.push(signal);
+          allSignals.push(signal);
+        }
+
+        // Send signals for this pair immediately
+        if (newSignals.length > 0) {
+          write({
+            type: 'signals',
+            pairIndex: i + 1,
+            stockA: pair.stock_a,
+            stockB: pair.stock_b,
+            signals: newSignals,
+            cumulativeSignals: allSignals.length,
+          });
+        }
+
+        write({
+          type: 'progress',
+          step: 'pair_done',
+          current: i + 1,
+          total: pairRows.length,
+          stockA: pair.stock_a,
+          stockB: pair.stock_b,
+          cumulativeSignals: allSignals.length,
+          lastPairSignalCount: points.length,
+          elapsedSec: Math.round((Date.now() - t0) / 1000),
+          percentApprox: Math.round(((i + 1) / pairRows.length) * 100),
+        });
+
       } catch (err: any) {
         console.error(`[replay-stream] Pair ${pair.stock_a}/${pair.stock_b} failed:`, err.message || err);
         write({
@@ -482,51 +561,9 @@ router.post('/replay-stream', async (req, res) => {
           percentApprox: Math.round(((i + 1) / pairRows.length) * 100),
         });
       }
-
-      write({
-        type: 'progress',
-        step: 'pair_done',
-        current: i + 1,
-        total: pairRows.length,
-        stockA: pair.stock_a,
-        stockB: pair.stock_b,
-        cumulativeSignals: allSignals.length,
-        lastPairSignalCount: points.length,
-        elapsedSec: Math.round((Date.now() - t0) / 1000),
-        percentApprox: Math.round(((i + 1) / pairRows.length) * 100),
-      });
-
-      return points;
-    })());
-
-    const results = await Promise.all(promises);
-    let nextSignalId = 1;
-    for (const points of results) {
-      for (const p of points) {
-        allSignals.push({
-          id: nextSignalId++,
-          timestamp: p.timestamp,
-          stockA: p.stockA,
-          stockB: p.stockB,
-          strategyType: p.strategyType,
-          syncCorrelation: p.syncCorrelation,
-          lagCorrelation: p.lagCorrelation,
-          correlationScore: p.correlationScore,
-          volumeScoreA: p.volumeScoreA,
-          volumeScoreB: p.volumeScoreB,
-          volumeScore: p.volumeScore,
-          totalScore: p.totalScore,
-          triggered: p.triggered,
-          entryConfirmed: p.entryConfirmed,
-          leader: p.leader,
-          lagger: p.lagger,
-          leaderMove: p.leaderMove,
-          laggerMove: p.laggerMove,
-          expectedMove: p.expectedMove,
-        });
-      }
     }
 
+    // Sort signals by timestamp desc
     allSignals.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
 
     const totalSignals = allSignals.length;
@@ -560,10 +597,13 @@ router.post('/replay-stream', async (req, res) => {
       signals: allSignals,
     };
 
+    stopHeartbeat();
     write({ type: 'complete', result });
     res.end();
+
   } catch (error: any) {
     console.error('Replay stream error:', error);
+    stopHeartbeat();
     try {
       write({ type: 'error', message: error.message || 'Replay stream failed' });
     } catch {

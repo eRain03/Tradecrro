@@ -97,9 +97,12 @@ app.listen(PORT, () => {
   // Start data fetching after server is ready
   startDataFetching();
 
-  // Start AI Pair Miner
+  // Start AI Pair Miner with pair limit and liquidity cleanup
   const miner = new AIPairMiner(dataFetcher);
-  miner.start();
+  miner.trimPairsToLimit();
+  miner.cleanupLowLiquidityPairs().then(() => {
+    miner.start();
+  });
 });
 
 export default app;

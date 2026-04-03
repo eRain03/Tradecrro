@@ -11,10 +11,11 @@ const execFileAsync = promisify(execFile);
  * Used for backtest replay only; does not affect live polling.
  */
 export class DatabentoHistorical {
-  private readonly pythonBin: string;
-  private readonly scriptPath: string;
-  private readonly dataset: string;
+  private pythonBin: string;
+  private scriptPath: string;
+  private dataset: string;
   private cache = new Map<string, HistoricalData[]>();
+  private heartbeatInterval: NodeJS.Timeout | null = null;
 
   constructor() {
     this.pythonBin = config.databento.python;
@@ -30,13 +31,25 @@ export class DatabentoHistorical {
   }
 
   /**
+   * Stop any pending heartbeat.
+   */
+  stopHeartbeat(): void {
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval);
+      this.heartbeatInterval = null;
+    }
+  }
+
+  /**
    * 1m bars aligned with SignalBacktester (interval string ignored; always ohlcv-1m).
+   * @param onHeartbeat - Optional callback to keep connection alive during long fetch
    */
   async getHistoricalRange(
     symbol: string,
     startTime: Date,
     endTime: Date,
-    _interval: string = '1m'
+    _interval: string = '1m',
+    onHeartbeat?: () => void
   ): Promise<HistoricalData[]> {
     const raw = symbol.trim();
     const cacheKey = `${raw}:${startTime.getTime()}:${endTime.getTime()}`;
@@ -63,6 +76,14 @@ export class DatabentoHistorical {
 
     console.log(`[Databento] 拉取 K 线 ${raw} ${startIso} → ${endIso} dataset=${this.dataset}`);
 
+    // Start heartbeat to keep connection alive during long fetch
+    if (onHeartbeat) {
+      this.heartbeatInterval = setInterval(() => {
+        console.log(`[Databento] 心跳: ${raw} 正在等待数据...`);
+        onHeartbeat();
+      }, 5000); // Every 5 seconds
+    }
+
     let stdout: string;
     try {
       const result = await execFileAsync(
@@ -80,8 +101,13 @@ export class DatabentoHistorical {
       if (e.stderr) {
         console.error(`[Databento] ${raw} stderr:`, e.stderr);
       }
+      // Stop heartbeat on error
+      this.stopHeartbeat();
       throw err;
     }
+
+    // Stop heartbeat after fetch completes
+    this.stopHeartbeat();
 
     let rows: Array<{
       date: string;

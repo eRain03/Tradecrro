@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue';
+import { ref, computed, onMounted, watch } from 'vue';
 
 const PAGE_SIZE = 100;
 
@@ -16,18 +16,100 @@ const replaySignalsFull = ref<BacktestResult['signals']>([]);
 // Filter state (database mode passes to backend; replay mode filters in frontend then paginates)
 const showTriggeredOnly = ref(true);
 
+// Market hours configuration (US Market: 9:30 AM - 4:00 PM ET = 14:30 - 21:00 UTC)
+const MARKET_OPEN_UTC = '14:30';
+const MARKET_CLOSE_UTC = '21:00';
+
+// Available trading days (last 30 days, excluding weekends)
+interface TradingDay {
+  date: string;
+  label: string;
+  isWeekend: boolean;
+}
+const tradingDays = ref<TradingDay[]>([]);
+
 // Form state
-const startDate = ref('');
-const startTime = ref('00:00');
-const endDate = ref('');
-const endTime = ref('23:59');
+const selectedStartDate = ref('');
+const selectedEndDate = ref('');
 const selectedPairs = ref<string[]>([]);
 
-// Initialize dates
-const today = new Date().toISOString().split('T')[0];
-const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0];
-startDate.value = yesterday || '';
-endDate.value = today || '';
+// Initialize trading days
+onMounted(() => {
+  const days: TradingDay[] = [];
+  for (let i = 0; i < 30; i++) {
+    const date = new Date();
+    date.setDate(date.getDate() - i);
+    const dateStr = date.toISOString().split('T')[0] || '';
+    const dayOfWeek = date.getDay();
+    const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+
+    const label = date.toLocaleDateString('en-US', {
+      weekday: 'short',
+      month: 'short',
+      day: 'numeric'
+    });
+
+    days.push({ date: dateStr, label, isWeekend });
+  }
+  tradingDays.value = days;
+
+  // Default to yesterday (Databento has ~1 day delay, today's data not yet available)
+  // Find the first non-weekend day that's NOT today (i.e., skip i=0)
+  const yesterday = days.slice(1).find(d => !d.isWeekend);
+  if (yesterday) {
+    selectedStartDate.value = yesterday.date;
+    selectedEndDate.value = yesterday.date;
+  }
+});
+
+// Get user's timezone for display
+const userTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+const timezoneOffset = new Date().getTimezoneOffset();
+const offsetHours = Math.floor(Math.abs(timezoneOffset) / 60);
+const offsetMins = Math.abs(timezoneOffset) % 60;
+const offsetSign = timezoneOffset <= 0 ? '+' : '-';
+const timezoneDisplay = `UTC${offsetSign}${offsetHours}${offsetMins > 0 ? ':' + String(offsetMins).padStart(2, '0') : ''}`;
+
+// Convert UTC market hours to local time for display
+const getLocalMarketHours = () => {
+  const today = new Date();
+  const openParts = MARKET_OPEN_UTC.split(':').map(Number);
+  const closeParts = MARKET_CLOSE_UTC.split(':').map(Number);
+  const openH = openParts[0] ?? 14;
+  const openM = openParts[1] ?? 30;
+  const closeH = closeParts[0] ?? 21;
+  const closeM = closeParts[1] ?? 0;
+
+  const openUTC = new Date(today);
+  openUTC.setUTCHours(openH, openM, 0, 0);
+
+  const closeUTC = new Date(today);
+  closeUTC.setUTCHours(closeH, closeM, 0, 0);
+
+  const formatTime = (d: Date) => d.toLocaleTimeString('en-US', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true
+  });
+
+  return {
+    open: formatTime(openUTC),
+    close: formatTime(closeUTC)
+  };
+};
+
+const localMarketHours = computed(getLocalMarketHours);
+
+const getRangeBody = () => {
+  // Use market hours automatically
+  const startDatetime = `${selectedStartDate.value}T${MARKET_OPEN_UTC}:00`;
+  const endDatetime = `${selectedEndDate.value}T${MARKET_CLOSE_UTC}:00`;
+  return {
+    startTime: startDatetime,
+    endTime: endDatetime,
+    pairs: selectedPairs.value.length > 0 ? selectedPairs.value : undefined,
+  };
+};
 
 const getSignalDedupKey = (signal: BacktestResult['signals'][number]) => {
   const secondTimestamp = signal.timestamp.slice(0, 19);
@@ -36,25 +118,12 @@ const getSignalDedupKey = (signal: BacktestResult['signals'][number]) => {
 
 const dedupeSignals = (signals: BacktestResult['signals']) => {
   const seen = new Set<string>();
-
   return signals.filter((signal) => {
     const key = getSignalDedupKey(signal);
-    if (seen.has(key)) {
-      return false;
-    }
+    if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });
-};
-
-const getRangeBody = () => {
-  const startDatetime = `${startDate.value}T${startTime.value}:00`;
-  const endDatetime = `${endDate.value}T${endTime.value}:00`;
-  return {
-    startTime: startDatetime,
-    endTime: endDatetime,
-    pairs: selectedPairs.value.length > 0 ? selectedPairs.value : undefined,
-  };
 };
 
 /** Auto-detect API base URL based on frontend location */
@@ -100,6 +169,7 @@ const fetchDbPage = async (page: number) => {
 
 type ReplayStreamMsg =
   | { type: 'start'; totalPairs: number; startTime: string; endTime: string }
+  | { type: 'heartbeat'; timestamp: string }
   | {
       type: 'progress';
       step: string;
@@ -116,6 +186,7 @@ type ReplayStreamMsg =
       lastPairSignalCount?: number;
       error?: string;
     }
+  | { type: 'signals'; pairIndex: number; stockA: string; stockB: string; signals: BacktestResult['signals']; cumulativeSignals: number }
   | { type: 'complete'; result: BacktestResult }
   | { type: 'error'; message: string };
 
@@ -131,8 +202,16 @@ const replayProgress = ref<{
   detail: string;
 } | null>(null);
 
-/** Market replay: NDJSON streaming progress + uses Databento when DATABENTO_API_KEY is configured */
+// Stream signals for real-time display
+const streamSignals = ref<BacktestResult['signals']>([]);
+const showStreamResults = ref(false);
+
+/** Market replay: NDJSON streaming with real-time signal display */
 const fetchReplay = async () => {
+  // Reset stream signals
+  streamSignals.value = [];
+  showStreamResults.value = true;
+
   replayProgress.value = {
     totalPairs: 0,
     current: 0,
@@ -222,6 +301,12 @@ const fetchReplay = async () => {
         };
       } else if (msg.type === 'progress') {
         applyProgress(msg);
+      } else if (msg.type === 'heartbeat') {
+        // Keepalive message, ignore (just prevents connection timeout)
+        console.log('[replay] heartbeat received');
+      } else if (msg.type === 'signals') {
+        // Real-time signals: append to streamSignals immediately
+        streamSignals.value = [...streamSignals.value, ...msg.signals];
       } else if (msg.type === 'complete') {
         const data = { ...msg.result };
         data.signals = dedupeSignals(data.signals || []);
@@ -253,6 +338,7 @@ const runBacktest = async () => {
   showError.value = false;
   backtestResult.value = null;
   replaySignalsFull.value = [];
+  streamSignals.value = [];
   showTriggeredOnly.value = true;
 
   try {
@@ -421,27 +507,40 @@ interface BacktestResult {
 
     <!-- Configuration Form -->
     <div class="config-card">
+      <!-- Market Hours Info -->
+      <div class="market-info-banner">
+        <span class="market-icon">🕐</span>
+        <span class="market-text">
+          US Market Hours: <strong>{{ localMarketHours.open }} - {{ localMarketHours.close }}</strong> ({{ userTimezone }})
+          <span class="market-note">Auto-applied to selected dates</span>
+        </span>
+      </div>
+
       <div class="form-section">
-        <h3>Time Range</h3>
-        <div class="date-range">
+        <h3>Select Trading Days</h3>
+        <div class="date-selector">
           <div class="date-field">
             <label>Start Date</label>
-            <input type="date" v-model="startDate" />
-          </div>
-          <div class="date-field">
-            <label>Start Time</label>
-            <input type="time" v-model="startTime" />
+            <select v-model="selectedStartDate" class="date-select">
+              <option v-for="day in tradingDays" :key="day.date" :value="day.date" :disabled="day.isWeekend">
+                {{ day.label }}{{ day.isWeekend ? ' (Weekend)' : '' }}
+              </option>
+            </select>
           </div>
           <div class="separator">→</div>
           <div class="date-field">
             <label>End Date</label>
-            <input type="date" v-model="endDate" />
-          </div>
-          <div class="date-field">
-            <label>End Time</label>
-            <input type="time" v-model="endTime" />
+            <select v-model="selectedEndDate" class="date-select">
+              <option v-for="day in tradingDays" :key="day.date" :value="day.date" :disabled="day.isWeekend">
+                {{ day.label }}{{ day.isWeekend ? ' (Weekend)' : '' }}
+              </option>
+            </select>
           </div>
         </div>
+        <p class="date-hint">
+          Selected range: <strong>{{ selectedStartDate }}</strong> to <strong>{{ selectedEndDate }}</strong>
+          · Market hours ({{ MARKET_OPEN_UTC }} - {{ MARKET_CLOSE_UTC }} UTC) will be used automatically
+        </p>
       </div>
 
       <div class="form-section mode-section">
@@ -453,15 +552,18 @@ interface BacktestResult {
           </label>
           <label class="mode-option">
             <input type="radio" value="replay" v-model="backtestMode" />
-            <span>Market Replay (Databento if DATABENTO_API_KEY configured, otherwise Yahoo; results paginated in frontend)</span>
+            <span>Market Replay (Databento if API key configured, otherwise Yahoo)</span>
           </label>
         </div>
+        <p v-if="backtestMode === 'replay'" class="databento-notice">
+          ⚠️ Databento DBEQ.BASIC has ~1 day delay. Today's intraday data may not be available yet.
+        </p>
       </div>
 
       <div class="form-actions">
         <button class="run-btn" @click="runBacktest" :disabled="isLoading">
           <span class="btn-icon">{{ isLoading ? '⏳' : '▶' }}</span>
-          <span class="btn-text">{{ isLoading ? 'Running Backtest...' : 'Run Backtest' }}</span>
+          <span class="btn-text">{{ isLoading ? 'Running...' : 'Run Backtest' }}</span>
         </button>
       </div>
     </div>
@@ -495,6 +597,43 @@ interface BacktestResult {
           · Elapsed: <strong>{{ replayProgress.elapsedSec }}</strong>s
         </p>
         <p class="loading-sub replay-detail">{{ replayProgress.detail }}</p>
+
+        <!-- Streaming Signals Preview -->
+        <div v-if="streamSignals.length > 0" class="stream-signals-preview">
+          <div class="stream-header">
+            <span class="stream-icon">📊</span>
+            <span class="stream-title">Live Signals ({{ streamSignals.length }})</span>
+          </div>
+          <div class="stream-table-container">
+            <table class="stream-table">
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Pair</th>
+                  <th>Score</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="(signal, idx) in streamSignals.slice(-10).reverse()" :key="`stream-${idx}`" class="stream-row">
+                  <td class="stream-time">{{ formatTime(signal.timestamp) }}</td>
+                  <td class="stream-pair">{{ signal.stockA }}/{{ signal.stockB }}</td>
+                  <td class="stream-score">
+                    <span :class="signal.triggered ? 'score-triggered' : 'score-watching'">
+                      {{ signal.totalScore.toFixed(0) }}
+                    </span>
+                  </td>
+                  <td class="stream-status">
+                    <span class="status-pill" :class="signal.triggered ? 'triggered' : 'watching'">
+                      {{ signal.triggered ? '✓' : '○' }}
+                    </span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p class="stream-hint">Showing latest 10 signals (scrolls automatically)</p>
+        </div>
       </template>
       <template v-else>
         <span class="loading-spinner">⏳</span>
@@ -758,6 +897,38 @@ export default {
   opacity: 0.8;
 }
 
+/* Market Info Banner */
+.market-info-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 18px;
+  background: linear-gradient(135deg, #e8f4f8 0%, #f0f8ff 100%);
+  border: 1px solid #b8d4e8;
+  border-radius: 6px;
+  margin-bottom: 20px;
+}
+
+.market-icon {
+  font-size: 1.3em;
+}
+
+.market-text {
+  font-size: 0.85em;
+  color: #2c5282;
+}
+
+.market-text strong {
+  color: #1a365d;
+}
+
+.market-note {
+  display: block;
+  font-size: 0.8em;
+  color: #4a6fa5;
+  margin-top: 2px;
+}
+
 .form-section {
   margin-bottom: 24px;
 }
@@ -787,11 +958,26 @@ export default {
   font-size: 0.8em;
 }
 
-.date-range {
+.date-selector {
   display: flex;
   align-items: flex-end;
   gap: 20px;
   flex-wrap: wrap;
+}
+
+.date-selector .separator {
+  padding-bottom: 10px;
+}
+
+.date-hint {
+  margin-top: 12px;
+  font-size: 0.75em;
+  color: #5a5a5a;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.date-hint strong {
+  color: #1a1a1a;
 }
 
 .date-field {
@@ -808,7 +994,7 @@ export default {
   letter-spacing: 0.5px;
 }
 
-.date-field input {
+.date-select {
   padding: 10px 14px;
   border: 1px solid #d5d5d5;
   font-family: 'JetBrains Mono', monospace;
@@ -862,6 +1048,16 @@ export default {
   accent-color: #c41e3a;
   width: 16px;
   height: 16px;
+}
+
+.databento-notice {
+  margin-top: 12px;
+  padding: 10px 14px;
+  background: #fffbeb;
+  border: 1px solid #fcd34d;
+  border-radius: 6px;
+  font-size: 0.85em;
+  color: #92400e;
 }
 
 .list-hint {
@@ -1130,6 +1326,130 @@ export default {
   line-height: 1.6;
   font-size: 0.88em;
   color: #7a7a7a;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   STREAM SIGNALS PREVIEW - Real-time signal display during replay
+   ───────────────────────────────────────────────────────────────────────────── */
+
+.stream-signals-preview {
+  margin-top: 32px;
+  background: #f8f9fa;
+  border: 1px solid #e5e5e5;
+  border-radius: 8px;
+  padding: 16px;
+  max-width: 600px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.stream-header {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.stream-icon {
+  font-size: 1.2em;
+}
+
+.stream-title {
+  font-weight: 600;
+  font-size: 0.9em;
+  color: #333;
+  letter-spacing: 0.5px;
+}
+
+.stream-table-container {
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.stream-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85em;
+}
+
+.stream-table th {
+  padding: 8px 12px;
+  text-align: left;
+  font-weight: 600;
+  color: #5a5a5a;
+  border-bottom: 1px solid #ddd;
+  font-size: 0.8em;
+  letter-spacing: 0.5px;
+}
+
+.stream-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid #eee;
+}
+
+.stream-row {
+  animation: fadeInRow 0.3s ease;
+}
+
+@keyframes fadeInRow {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.stream-time {
+  font-family: 'JetBrains Mono', monospace;
+  color: #333;
+}
+
+.stream-pair {
+  font-weight: 500;
+  color: #c41e3a;
+}
+
+.stream-score {
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 600;
+}
+
+.score-triggered {
+  color: #16a34a;
+}
+
+.score-watching {
+  color: #8b8b8b;
+}
+
+.stream-status {
+  text-align: center;
+}
+
+.status-pill {
+  display: inline-block;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  line-height: 20px;
+  text-align: center;
+  font-size: 0.8em;
+}
+
+.status-pill.triggered {
+  background: #16a34a;
+  color: white;
+}
+
+.status-pill.watching {
+  background: #e5e5e5;
+  color: #8b8b8b;
+}
+
+.stream-hint {
+  text-align: center;
+  font-size: 0.75em;
+  color: #8b8b8b;
+  margin-top: 12px;
+  font-style: italic;
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────
