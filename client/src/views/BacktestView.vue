@@ -57,11 +57,11 @@ const getRangeBody = () => {
   };
 };
 
-/** Same as src/api/http.ts; connects directly to backend during development to avoid Vite proxy buffering NDJSON streams and preventing progress updates */
+/** Same as src/api/http.ts; uses VITE_API_URL env var */
 function resolveApiBase(): string {
   const url = (import.meta.env.VITE_API_URL as string | undefined)?.trim();
   if (url) return url.replace(/\/$/, '');
-  return import.meta.env.DEV ? 'http://localhost:3001' : '';
+  return '';
 }
 
 /** Database: server-side pagination, max 100 items per page */
