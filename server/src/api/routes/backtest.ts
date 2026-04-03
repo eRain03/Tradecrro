@@ -441,30 +441,47 @@ router.post('/replay-stream', async (req, res) => {
         `[replay-stream] 交易对 ${i + 1}/${pairRows.length} 开始 ${pair.stock_a}/${pair.stock_b}`
       );
 
-      const points = await backtester.runForPair(pair.stock_a, pair.stock_b, start, end, {
-        onProgress: (e) => {
-          const pct = pairSubProgress(i, pair, pairRows.length, e);
-          write({
-            type: 'progress',
-            step: 'symbol',
-            subStep: e.kind,
-            symbol: e.symbol,
-            barCount: e.barCount,
-            current: i + 1,
-            total: pairRows.length,
-            stockA: pair.stock_a,
-            stockB: pair.stock_b,
-            cumulativeSignals: allSignals.length,
-            elapsedSec: Math.round((Date.now() - t0) / 1000),
-            percentApprox: pct,
-          });
-          console.log(
-            `[replay-stream]   ${pair.stock_a}/${pair.stock_b} → ${e.kind}` +
-              (e.symbol ? ` ${e.symbol}` : '') +
-              (e.barCount != null ? ` bars=${e.barCount}` : '')
-          );
-        },
-      });
+      let points: any[] = [];
+      try {
+        points = await backtester.runForPair(pair.stock_a, pair.stock_b, start, end, {
+          onProgress: (e) => {
+            const pct = pairSubProgress(i, pair, pairRows.length, e);
+            write({
+              type: 'progress',
+              step: 'symbol',
+              subStep: e.kind,
+              symbol: e.symbol,
+              barCount: e.barCount,
+              current: i + 1,
+              total: pairRows.length,
+              stockA: pair.stock_a,
+              stockB: pair.stock_b,
+              cumulativeSignals: allSignals.length,
+              elapsedSec: Math.round((Date.now() - t0) / 1000),
+              percentApprox: pct,
+            });
+            console.log(
+              `[replay-stream]   ${pair.stock_a}/${pair.stock_b} → ${e.kind}` +
+                (e.symbol ? ` ${e.symbol}` : '') +
+                (e.barCount != null ? ` bars=${e.barCount}` : '')
+            );
+          },
+        });
+      } catch (err: any) {
+        console.error(`[replay-stream] Pair ${pair.stock_a}/${pair.stock_b} failed:`, err.message || err);
+        write({
+          type: 'progress',
+          step: 'pair_error',
+          current: i + 1,
+          total: pairRows.length,
+          stockA: pair.stock_a,
+          stockB: pair.stock_b,
+          error: err.message || String(err),
+          cumulativeSignals: allSignals.length,
+          elapsedSec: Math.round((Date.now() - t0) / 1000),
+          percentApprox: Math.round(((i + 1) / pairRows.length) * 100),
+        });
+      }
 
       write({
         type: 'progress',

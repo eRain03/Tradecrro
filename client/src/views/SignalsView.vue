@@ -1,11 +1,60 @@
 <script setup lang="ts">
-import { onMounted, computed, ref } from 'vue';
+import { onMounted, computed, ref, onUnmounted } from 'vue';
 import { useTradingStore } from '../stores/trading';
 
 const store = useTradingStore();
 
+// Market status
+const marketOpen = ref(false);
+const marketTime = ref('');
+const nextOpenTime = ref('');
+
+const updateMarketStatus = () => {
+  const now = new Date();
+  const utcHour = now.getUTCHours();
+  const utcMin = now.getUTCMinutes();
+  const day = now.getUTCDay();
+
+  // Forex/Stock market: main trading hours Mon-Fri 8:00-17:00 UTC
+  const isWeekday = day >= 1 && day <= 5;
+  marketOpen.value = isWeekday && (utcHour >= 8 && utcHour < 17);
+
+  const hours = String(utcHour).padStart(2, '0');
+  const minutes = String(utcMin).padStart(2, '0');
+  marketTime.value = `${hours}:${minutes} UTC`;
+
+  // Calculate next open time
+  if (!marketOpen.value) {
+    let nextOpen = new Date(now);
+    if (day === 0) {
+      // Sunday - next Monday 8:00 UTC
+      nextOpen.setUTCDate(nextOpen.getUTCDate() + 1);
+    } else if (day === 6) {
+      // Saturday - next Monday 8:00 UTC
+      nextOpen.setUTCDate(nextOpen.getUTCDate() + 2);
+    } else if (utcHour >= 17) {
+      // After market close - next day 8:00 UTC
+      nextOpen.setUTCDate(nextOpen.getUTCDate() + 1);
+    }
+    nextOpen.setUTCHours(8, 0, 0, 0);
+
+    const diff = nextOpen.getTime() - now.getTime();
+    const diffHours = Math.floor(diff / (1000 * 60 * 60));
+    const diffMins = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+    nextOpenTime.value = `${diffHours}h ${diffMins}m until open`;
+  }
+};
+
+let timeInterval: ReturnType<typeof setInterval>;
+
 onMounted(() => {
   store.fetchSignals();
+  updateMarketStatus();
+  timeInterval = setInterval(updateMarketStatus, 1000);
+});
+
+onUnmounted(() => {
+  clearInterval(timeInterval);
 });
 
 const showTriggeredOnly = ref(false);
@@ -107,6 +156,19 @@ const getEntryLogicText = (signal: any) => {
 
 <template>
   <div class="signals-view">
+    <!-- Market Closed Banner -->
+    <div v-if="!marketOpen" class="market-closed-overlay">
+      <div class="market-closed-content">
+        <div class="closed-icon">📴</div>
+        <h1 class="closed-title">MARKET CLOSED</h1>
+        <div class="closed-time">{{ marketTime }}</div>
+        <div class="next-open">{{ nextOpenTime }}</div>
+        <p class="closed-hint">Signals will resume when market opens</p>
+      </div>
+    </div>
+
+    <!-- Normal Content (shown when market is open) -->
+    <template v-else>
     <div class="view-header">
       <h1>
         <span class="title-separator">◆</span>
@@ -318,6 +380,7 @@ const getEntryLogicText = (signal: any) => {
         </div>
       </div>
     </div>
+    </template>
   </div>
 </template>
 
@@ -336,6 +399,78 @@ export default {
 <style scoped>
 .signals-view {
   max-width: 1400px;
+}
+
+/* Market Closed Overlay */
+.market-closed-overlay {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: calc(100vh - 200px);
+  padding: 40px;
+}
+
+.market-closed-content {
+  text-align: center;
+  background: linear-gradient(135deg, #ffffff 0%, #f8f8f5 100%);
+  border: 2px solid #d4d4d4;
+  border-radius: 12px;
+  padding: 60px 80px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.08);
+  max-width: 500px;
+  animation: fade-in 0.5s ease-out;
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.closed-icon {
+  font-size: 4em;
+  margin-bottom: 20px;
+  opacity: 0.8;
+}
+
+.closed-title {
+  font-size: 2.5em;
+  font-weight: 700;
+  color: #8b8b8b;
+  letter-spacing: 6px;
+  text-transform: uppercase;
+  margin-bottom: 16px;
+  font-family: 'Times New Roman', Times, serif;
+}
+
+.closed-time {
+  font-size: 1.8em;
+  font-weight: 700;
+  color: #1a1a1a;
+  font-family: 'Courier New', Courier, monospace;
+  margin-bottom: 12px;
+  padding: 8px 20px;
+  background: #ebebe6;
+  border-radius: 6px;
+  display: inline-block;
+}
+
+.next-open {
+  font-size: 1em;
+  color: #5a5a5a;
+  margin-bottom: 20px;
+  font-weight: 600;
+}
+
+.closed-hint {
+  font-size: 0.85em;
+  color: #8b8b8b;
+  font-style: italic;
 }
 
 .view-header {

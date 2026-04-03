@@ -65,10 +65,8 @@ function seedDefaultStockPairs(): void {
   const pairsToInsert: Array<[string, string, string, number]> = [];
   const pairSet = new Set<string>();
 
-  db.prepare(`
-    UPDATE stock_pairs
-    SET is_active = 0
-  `).run();
+  // NOTE: Don't reset is_active for existing pairs - preserve AI-mined pairs
+  // Only ensure default pairs are active
 
   for (const symbols of Object.values(stockGroups)) {
     for (let i = 0; i < symbols.length; i++) {
@@ -82,20 +80,20 @@ function seedDefaultStockPairs(): void {
     }
   }
 
-  // Bulk insert
-  const insertPair = db.prepare(`
-    INSERT INTO stock_pairs (stock_a, stock_b, strategy_type, is_active)
-    VALUES (?, ?, ?, ?)
-  `);
+  // Bulk insert (only activate default pairs, don't deactivate others)
   const findPair = db.prepare(`
     SELECT id
     FROM stock_pairs
     WHERE stock_a = ? AND stock_b = ?
     LIMIT 1
   `);
+  const insertPair = db.prepare(`
+    INSERT INTO stock_pairs (stock_a, stock_b, strategy_type, is_active)
+    VALUES (?, ?, ?, ?)
+  `);
   const updatePair = db.prepare(`
     UPDATE stock_pairs
-    SET strategy_type = ?, is_active = ?
+    SET strategy_type = ?, is_active = 1
     WHERE id = ?
   `);
 
@@ -103,7 +101,8 @@ function seedDefaultStockPairs(): void {
     for (const pair of pairs) {
       const existing = findPair.get(pair[0], pair[1]) as { id: number } | undefined;
       if (existing) {
-        updatePair.run(pair[2], pair[3], existing.id);
+        // Only update if not already active (preserve existing active pairs)
+        updatePair.run(pair[2], existing.id);
       } else {
         insertPair.run(...pair);
       }
@@ -112,8 +111,8 @@ function seedDefaultStockPairs(): void {
 
   insertMany(pairsToInsert);
 
-  const count = db.prepare('SELECT COUNT(*) as count FROM stock_pairs').get() as { count: number };
-  console.log(`✅ Inserted ${count.count} default stock pairs`);
+  const count = db.prepare('SELECT COUNT(*) as count FROM stock_pairs WHERE is_active = 1').get() as { count: number };
+  console.log(`✅ Default stock pairs ensured (${count.count} active pairs total)`);
 }
 
 if (require.main === module) {
