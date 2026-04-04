@@ -73,6 +73,10 @@ onUnmounted(() => {
           <span class="nav-icon">🔬</span>
           <span class="nav-text" v-show="!collapsed">Backtest</span>
         </RouterLink>
+        <RouterLink to="/test" class="nav-item" v-slot="{ isActive }">
+          <span class="nav-icon">🧪</span>
+          <span class="nav-text" v-show="!collapsed">Test</span>
+        </RouterLink>
         <RouterLink to="/settings" class="nav-item" v-slot="{ isActive }">
           <span class="nav-icon">⚙️</span>
           <span class="nav-text" v-show="!collapsed">Settings</span>

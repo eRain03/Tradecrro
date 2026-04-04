@@ -14,6 +14,7 @@ import signalsRoutes from './api/routes/signals';
 import tradesRoutes from './api/routes/trades';
 import settingsRoutes from './api/routes/settings';
 import backtestRoutes from './api/routes/backtest';
+import testRoutes from './api/routes/test';
 import { wsService } from './api/websocket';
 
 const app = express();
@@ -40,6 +41,7 @@ app.use('/api/signals', signalsRoutes);
 app.use('/api/trades', tradesRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api/backtest', backtestRoutes);
+app.use('/api/test', testRoutes);
 
 // Initialize database
 runMigrations();

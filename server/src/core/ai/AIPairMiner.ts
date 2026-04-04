@@ -1,7 +1,9 @@
 import axios from 'axios';
 import { getDatabase } from '../../database/connection';
 import { YahooFinanceClient } from '../../data/YahooFinanceClient';
+import TigerClient from '../../data/TigerClient';
 import UnifiedDataFetcher from '../../data/UnifiedDataFetcher';
+import config from '../../config';
 
 const POOL_OF_TICKERS = [
   // Tech & Software
@@ -50,11 +52,27 @@ export class AIPairMiner {
   private isRunning = false;
   private timer: NodeJS.Timeout | null = null;
   private yahooClient = new YahooFinanceClient();
+  private tigerClient: TigerClient | null = null;
   private dataFetcher: UnifiedDataFetcher;
   private readonly MAX_PAIRS = 400;
 
   constructor(dataFetcher: UnifiedDataFetcher) {
     this.dataFetcher = dataFetcher;
+
+    // Initialize Tiger client if configured
+    if (config.dataSource.provider === 'tiger') {
+      this.tigerClient = new TigerClient();
+    }
+  }
+
+  /**
+   * Get quote using the configured data source
+   */
+  private async getQuote(symbol: string) {
+    if (this.tigerClient) {
+      return this.tigerClient.getQuote(symbol);
+    }
+    return this.yahooClient.getQuote(symbol);
   }
 
   // API settings
@@ -131,8 +149,8 @@ export class AIPairMiner {
 
     for (const pair of pairs) {
       try {
-        const quoteA = await this.yahooClient.getQuote(pair.stock_a);
-        const quoteB = await this.yahooClient.getQuote(pair.stock_b);
+        const quoteA = await this.getQuote(pair.stock_a);
+        const quoteB = await this.getQuote(pair.stock_b);
         const valueA = quoteA.price * quoteA.volume;
         const valueB = quoteB.price * quoteB.volume;
 
@@ -286,8 +304,8 @@ export class AIPairMiner {
 
   private async verifyLiquidity(stockA: string, stockB: string): Promise<boolean> {
     try {
-      const quoteA = await this.yahooClient.getQuote(stockA);
-      const quoteB = await this.yahooClient.getQuote(stockB);
+      const quoteA = await this.getQuote(stockA);
+      const quoteB = await this.getQuote(stockB);
 
       // Check daily traded value (Price * Volume). Minimum $10,000,000
       const valueA = quoteA.price * quoteA.volume;
