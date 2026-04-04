@@ -773,13 +773,6 @@ const lagCorrelationColor = computed(() => {
   return '#6b7280';
 });
 
-const scoreColor = computed(() => {
-  if (!result.value) return '#6b7280';
-  if (result.value.finalMeetsThreshold) return '#16a34a';
-  if (result.value.finalScore >= 70) return '#f59e0b';
-  return '#6b7280';
-});
-
 const isNegativeCorr = computed(() => result.value?.correlationType === 'negative_sync');
 
 // Helper: get correlation at specific time
@@ -943,21 +936,14 @@ const getCorrelationAtTime = (time: string): CorrelationPoint | null => {
         </div>
 
         <div class="stat">
-          <span class="label">Final Score</span>
-          <span class="value score-value" :style="{ color: scoreColor }">
-            {{ result.finalScore.toFixed(1) }}
-            <span class="score-badge" :class="{ passed: result.finalMeetsThreshold }">
-              {{ result.finalMeetsThreshold ? 'PASS' : 'FAIL' }}
-            </span>
-          </span>
-        </div>
-
-        <div class="stat">
-          <span class="label">Score breakdown</span>
+          <span class="label">Score</span>
           <span class="value breakdown">
             <span class="corr-part">{{ result.finalCorrelationScore.toFixed(1) }}</span>
             <span class="plus">+</span>
             <span class="vol-part">{{ result.finalVolumeScore.toFixed(1) }}</span>
+            <span class="score-badge" :class="{ passed: result.finalMeetsThreshold }">
+              {{ result.finalMeetsThreshold ? 'PASS' : 'FAIL' }}
+            </span>
           </span>
         </div>
 
@@ -1297,12 +1283,6 @@ const getCorrelationAtTime = (time: string): CorrelationPoint | null => {
 .badge.none {
   background: #f1f5f9;
   color: #64748b;
-}
-
-.score-value {
-  display: flex;
-  align-items: center;
-  gap: 8px;
 }
 
 .score-badge {
