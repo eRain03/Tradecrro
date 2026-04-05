@@ -28,7 +28,7 @@ export interface BacktestSignalPoint {
 }
 
 export interface RunForPairProgressEvent {
-  kind: 'symbol_start' | 'symbol_done' | 'compute';
+  kind: 'symbol_start' | 'symbol_done' | 'compute' | 'heartbeat';
   stockA: string;
   stockB: string;
   /** 拉取 K 线时的标的 */
@@ -41,9 +41,9 @@ export class SignalBacktester {
   private entryChecker = new EntryChecker();
   private historical: HistoricalRangeSource = getHistoricalRangeSource();
 
-  // Yahoo reliable intraday bar
-  private readonly yahooInterval = '1m';
-  private readonly intervalSeconds = 60;
+  // Yahoo reliable intraday bar (5m for better correlation stability)
+  private readonly yahooInterval = '5m';
+  private readonly intervalSeconds = 300;
   private readonly lookbackPoints = Math.max(
     2,
     Math.floor((config.trading.lookbackWindow * 60) / this.intervalSeconds)
@@ -65,114 +65,146 @@ export class SignalBacktester {
     onProgress?.({ kind: 'symbol_start', stockA, stockB, symbol: stockA });
     onProgress?.({ kind: 'symbol_start', stockA, stockB, symbol: stockB });
 
-    const [historyA, historyB] = await Promise.all([
-      this.historical.getHistoricalRange(stockA, startTime, endTime, this.yahooInterval),
-      this.historical.getHistoricalRange(stockB, startTime, endTime, this.yahooInterval),
-    ]);
-
-    onProgress?.({
-      kind: 'symbol_done',
-      stockA,
-      stockB,
-      symbol: stockA,
-      barCount: historyA.length,
-    });
-    onProgress?.({
-      kind: 'symbol_done',
-      stockA,
-      stockB,
-      symbol: stockB,
-      barCount: historyB.length,
-    });
-
-    onProgress?.({ kind: 'compute', stockA, stockB });
-
-    const seriesA = this.toMap(historyA);
-    const seriesB = this.toMap(historyB);
-    const commonTimes = [...seriesA.keys()].filter((t) => seriesB.has(t)).sort((a, b) => a - b);
-
-    if (commonTimes.length < this.lookbackPoints + 1) {
-      return [];
+    // Heartbeat mechanism: send heartbeat every 5 seconds while waiting for data
+    let heartbeatTimer: NodeJS.Timeout | null = null;
+    if (onProgress) {
+      heartbeatTimer = setInterval(() => {
+        onProgress({ kind: 'heartbeat', stockA, stockB });
+      }, 5000);
     }
 
-    const output: BacktestSignalPoint[] = [];
+    try {
+      // Check if historical source supports heartbeat (Databento)
+      const historicalWithHeartbeat = this.historical as any;
+      const supportsHeartbeat = typeof historicalWithHeartbeat.getHistoricalRange === 'function';
 
-    for (let i = this.lookbackPoints; i < commonTimes.length; i++) {
-      const windowTimes = commonTimes.slice(i - this.lookbackPoints, i + 1);
+      const heartbeatCallback = () => onProgress?.({ kind: 'heartbeat', stockA, stockB });
 
-      const pricesA = windowTimes.map((t) => seriesA.get(t)!.close);
-      const pricesB = windowTimes.map((t) => seriesB.get(t)!.close);
-      const volumesA = windowTimes.slice(1).map((t) => this.toFinite(seriesA.get(t)!.volume));
-      const volumesB = windowTimes.slice(1).map((t) => this.toFinite(seriesB.get(t)!.volume));
+      const [historyA, historyB] = await Promise.all([
+        supportsHeartbeat && historicalWithHeartbeat.getHistoricalRange.length >= 5
+          ? historicalWithHeartbeat.getHistoricalRange(stockA, startTime, endTime, this.yahooInterval, heartbeatCallback)
+          : this.historical.getHistoricalRange(stockA, startTime, endTime, this.yahooInterval),
+        supportsHeartbeat && historicalWithHeartbeat.getHistoricalRange.length >= 5
+          ? historicalWithHeartbeat.getHistoricalRange(stockB, startTime, endTime, this.yahooInterval, heartbeatCallback)
+          : this.historical.getHistoricalRange(stockB, startTime, endTime, this.yahooInterval),
+      ]);
 
-      const returnsA = ReturnCalculator.calculateReturns(pricesA);
-      const returnsB = ReturnCalculator.calculateReturns(pricesB);
-
-      const latestA = seriesA.get(commonTimes[i])!;
-      const latestB = seriesB.get(commonTimes[i])!;
-      const avgVolumeA = volumesA.reduce((s, v) => s + v, 0) / volumesA.length || 1;
-      const avgVolumeB = volumesB.reduce((s, v) => s + v, 0) / volumesB.length || 1;
-
-      const score = this.scoringEngine.calculatePairScore(
-        stockA,
-        stockB,
-        returnsA,
-        returnsB,
-        this.toFinite(latestA.volume),
-        avgVolumeA,
-        this.toFinite(latestB.volume),
-        avgVolumeB
-      );
-
-      const strategyType = this.scoringEngine.determineStrategy(score);
-      const expectedMove = Math.max(
-        this.entryChecker.calculateExpectedMove(returnsA),
-        this.entryChecker.calculateExpectedMove(returnsB)
-      );
-
-      let entryConfirmed = false;
-      let entryReason: string | undefined;
-      let leaderMove: number | undefined;
-      let laggerMove: number | undefined;
-
-      if (strategyType === 'positive_lag' && score.leader && score.lagger) {
-        const leaderReturns = score.leader === stockA ? returnsA : returnsB;
-        const laggerReturns = score.lagger === stockA ? returnsA : returnsB;
-        const entry = this.entryChecker.checkEntry(score, leaderReturns, laggerReturns, expectedMove);
-        entryConfirmed = entry.canEnter;
-        entryReason = entry.reason;
-        leaderMove = entry.leaderMove;
-        laggerMove = entry.laggerMove;
-      } else if (strategyType === 'negative_corr') {
-        const entry = this.entryChecker.checkEntry(score, returnsA, returnsB, expectedMove);
-        entryConfirmed = entry.canEnter;
-        entryReason = entry.reason;
+      // Stop heartbeat timer
+      if (heartbeatTimer) {
+        clearInterval(heartbeatTimer);
+        heartbeatTimer = null;
       }
 
-      output.push({
-        timestamp: new Date(commonTimes[i]).toISOString(),
+      onProgress?.({
+        kind: 'symbol_done',
         stockA,
         stockB,
-        strategyType,
-        syncCorrelation: score.syncCorrelation,
-        lagCorrelation: score.lagCorrelation,
-        correlationScore: score.correlationScore,
-        volumeScoreA: score.volumeScoreA,
-        volumeScoreB: score.volumeScoreB,
-        volumeScore: score.volumeScore,
-        totalScore: score.totalScore,
-        triggered: score.meetsThreshold,
-        entryConfirmed,
-        leader: score.leader,
-        lagger: score.lagger,
-        leaderMove,
-        laggerMove,
-        expectedMove,
-        entryReason,
+        symbol: stockA,
+        barCount: historyA.length,
       });
-    }
+      onProgress?.({
+        kind: 'symbol_done',
+        stockA,
+        stockB,
+        symbol: stockB,
+        barCount: historyB.length,
+      });
 
-    return output;
+      onProgress?.({ kind: 'compute', stockA, stockB });
+
+      const seriesA = this.toMap(historyA);
+      const seriesB = this.toMap(historyB);
+      const commonTimes = [...seriesA.keys()].filter((t) => seriesB.has(t)).sort((a, b) => a - b);
+
+      if (commonTimes.length < this.lookbackPoints + 1) {
+        return [];
+      }
+
+      const output: BacktestSignalPoint[] = [];
+
+      for (let i = this.lookbackPoints; i < commonTimes.length; i++) {
+        const windowTimes = commonTimes.slice(i - this.lookbackPoints, i + 1);
+
+        const pricesA = windowTimes.map((t) => seriesA.get(t)!.close);
+        const pricesB = windowTimes.map((t) => seriesB.get(t)!.close);
+        const volumesA = windowTimes.slice(1).map((t) => this.toFinite(seriesA.get(t)!.volume));
+        const volumesB = windowTimes.slice(1).map((t) => this.toFinite(seriesB.get(t)!.volume));
+
+        const returnsA = ReturnCalculator.calculateReturns(pricesA);
+        const returnsB = ReturnCalculator.calculateReturns(pricesB);
+
+        const latestA = seriesA.get(commonTimes[i])!;
+        const latestB = seriesB.get(commonTimes[i])!;
+        const avgVolumeA = volumesA.reduce((s, v) => s + v, 0) / volumesA.length || 1;
+        const avgVolumeB = volumesB.reduce((s, v) => s + v, 0) / volumesB.length || 1;
+
+        const score = this.scoringEngine.calculatePairScore(
+          stockA,
+          stockB,
+          returnsA,
+          returnsB,
+          this.toFinite(latestA.volume),
+          avgVolumeA,
+          this.toFinite(latestB.volume),
+          avgVolumeB
+        );
+
+        const strategyType = this.scoringEngine.determineStrategy(score);
+        const expectedMove = Math.max(
+          this.entryChecker.calculateExpectedMove(returnsA),
+          this.entryChecker.calculateExpectedMove(returnsB)
+        );
+
+        let entryConfirmed = false;
+        let entryReason: string | undefined;
+        let leaderMove: number | undefined;
+        let laggerMove: number | undefined;
+
+        if (strategyType === 'positive_lag' && score.leader && score.lagger) {
+          const leaderReturns = score.leader === stockA ? returnsA : returnsB;
+          const laggerReturns = score.lagger === stockA ? returnsA : returnsB;
+          const entry = this.entryChecker.checkEntry(score, leaderReturns, laggerReturns, expectedMove);
+          entryConfirmed = entry.canEnter;
+          entryReason = entry.reason;
+          leaderMove = entry.leaderMove;
+          laggerMove = entry.laggerMove;
+        } else if (strategyType === 'negative_corr') {
+          const entry = this.entryChecker.checkEntry(score, returnsA, returnsB, expectedMove);
+          entryConfirmed = entry.canEnter;
+          entryReason = entry.reason;
+        }
+
+        output.push({
+          timestamp: new Date(commonTimes[i]).toISOString(),
+          stockA,
+          stockB,
+          strategyType,
+          syncCorrelation: score.syncCorrelation,
+          lagCorrelation: score.lagCorrelation,
+          correlationScore: score.correlationScore,
+          volumeScoreA: score.volumeScoreA,
+          volumeScoreB: score.volumeScoreB,
+          volumeScore: score.volumeScore,
+          totalScore: score.totalScore,
+          triggered: score.meetsThreshold,
+          entryConfirmed,
+          leader: score.leader,
+          lagger: score.lagger,
+          leaderMove,
+          laggerMove,
+          expectedMove,
+          entryReason,
+        });
+      }
+
+      return output;
+    } finally {
+      // Ensure heartbeat timer is always stopped
+      if (heartbeatTimer) {
+        clearInterval(heartbeatTimer);
+        heartbeatTimer = null;
+      }
+    }
   }
 
   private toMap(history: HistoricalData[]): Map<number, HistoricalData> {

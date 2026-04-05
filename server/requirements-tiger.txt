@@ -1,0 +1,5 @@
+# Tiger Open API Python SDK
+# For DATA_SOURCE=tiger market data
+
+tigeropen>=1.0.0
+pandas>=2.0.0

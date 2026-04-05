@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue';
+import { ref, computed, onMounted, watch } from 'vue';
 
 const PAGE_SIZE = 100;
 
@@ -8,26 +8,108 @@ const backtestResult = ref<BacktestResult | null>(null);
 const showError = ref(false);
 const errorMessage = ref('');
 
-/** 数据库分页查询 vs 行情重放（Databento / Yahoo，全量拉取后前端按 100 条分页） */
+/** Database paginated query vs market replay (Databento / Yahoo, frontend pagination with 100 items per page after fetching all data) */
 const backtestMode = ref<'db' | 'replay'>('db');
 const replayPage = ref(1);
 const replaySignalsFull = ref<BacktestResult['signals']>([]);
 
-// Filter state（数据库模式会传给后端；重放模式在前端过滤后再分页）
+// Filter state (database mode passes to backend; replay mode filters in frontend then paginates)
 const showTriggeredOnly = ref(true);
 
+// Market hours configuration (US Market: 9:30 AM - 4:00 PM ET = 14:30 - 21:00 UTC)
+const MARKET_OPEN_UTC = '14:30';
+const MARKET_CLOSE_UTC = '21:00';
+
+// Available trading days (last 30 days, excluding weekends)
+interface TradingDay {
+  date: string;
+  label: string;
+  isWeekend: boolean;
+}
+const tradingDays = ref<TradingDay[]>([]);
+
 // Form state
-const startDate = ref('');
-const startTime = ref('00:00');
-const endDate = ref('');
-const endTime = ref('23:59');
+const selectedStartDate = ref('');
+const selectedEndDate = ref('');
 const selectedPairs = ref<string[]>([]);
 
-// Initialize dates
-const today = new Date().toISOString().split('T')[0];
-const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0];
-startDate.value = yesterday || '';
-endDate.value = today || '';
+// Initialize trading days
+onMounted(() => {
+  const days: TradingDay[] = [];
+  for (let i = 0; i < 30; i++) {
+    const date = new Date();
+    date.setDate(date.getDate() - i);
+    const dateStr = date.toISOString().split('T')[0] || '';
+    const dayOfWeek = date.getDay();
+    const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+
+    const label = date.toLocaleDateString('en-US', {
+      weekday: 'short',
+      month: 'short',
+      day: 'numeric'
+    });
+
+    days.push({ date: dateStr, label, isWeekend });
+  }
+  tradingDays.value = days;
+
+  // Default to yesterday (Databento has ~1 day delay, today's data not yet available)
+  // Find the first non-weekend day that's NOT today (i.e., skip i=0)
+  const yesterday = days.slice(1).find(d => !d.isWeekend);
+  if (yesterday) {
+    selectedStartDate.value = yesterday.date;
+    selectedEndDate.value = yesterday.date;
+  }
+});
+
+// Get user's timezone for display
+const userTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+const timezoneOffset = new Date().getTimezoneOffset();
+const offsetHours = Math.floor(Math.abs(timezoneOffset) / 60);
+const offsetMins = Math.abs(timezoneOffset) % 60;
+const offsetSign = timezoneOffset <= 0 ? '+' : '-';
+const timezoneDisplay = `UTC${offsetSign}${offsetHours}${offsetMins > 0 ? ':' + String(offsetMins).padStart(2, '0') : ''}`;
+
+// Convert UTC market hours to local time for display
+const getLocalMarketHours = () => {
+  const today = new Date();
+  const openParts = MARKET_OPEN_UTC.split(':').map(Number);
+  const closeParts = MARKET_CLOSE_UTC.split(':').map(Number);
+  const openH = openParts[0] ?? 14;
+  const openM = openParts[1] ?? 30;
+  const closeH = closeParts[0] ?? 21;
+  const closeM = closeParts[1] ?? 0;
+
+  const openUTC = new Date(today);
+  openUTC.setUTCHours(openH, openM, 0, 0);
+
+  const closeUTC = new Date(today);
+  closeUTC.setUTCHours(closeH, closeM, 0, 0);
+
+  const formatTime = (d: Date) => d.toLocaleTimeString('en-US', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true
+  });
+
+  return {
+    open: formatTime(openUTC),
+    close: formatTime(closeUTC)
+  };
+};
+
+const localMarketHours = computed(getLocalMarketHours);
+
+const getRangeBody = () => {
+  // Use market hours automatically
+  const startDatetime = `${selectedStartDate.value}T${MARKET_OPEN_UTC}:00`;
+  const endDatetime = `${selectedEndDate.value}T${MARKET_CLOSE_UTC}:00`;
+  return {
+    startTime: startDatetime,
+    endTime: endDatetime,
+    pairs: selectedPairs.value.length > 0 ? selectedPairs.value : undefined,
+  };
+};
 
 const getSignalDedupKey = (signal: BacktestResult['signals'][number]) => {
   const secondTimestamp = signal.timestamp.slice(0, 19);
@@ -36,35 +118,30 @@ const getSignalDedupKey = (signal: BacktestResult['signals'][number]) => {
 
 const dedupeSignals = (signals: BacktestResult['signals']) => {
   const seen = new Set<string>();
-
   return signals.filter((signal) => {
     const key = getSignalDedupKey(signal);
-    if (seen.has(key)) {
-      return false;
-    }
+    if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });
 };
 
-const getRangeBody = () => {
-  const startDatetime = `${startDate.value}T${startTime.value}:00`;
-  const endDatetime = `${endDate.value}T${endTime.value}:00`;
-  return {
-    startTime: startDatetime,
-    endTime: endDatetime,
-    pairs: selectedPairs.value.length > 0 ? selectedPairs.value : undefined,
-  };
-};
-
-/** 与 src/api/http.ts 一致；开发时直连后端，避免 Vite 代理缓冲 NDJSON 流导致进度不刷新 */
+/** Auto-detect API base URL based on frontend location */
 function resolveApiBase(): string {
-  const url = (import.meta.env.VITE_API_URL as string | undefined)?.trim();
-  if (url) return url.replace(/\/$/, '');
-  return import.meta.env.DEV ? 'http://localhost:3001' : '';
+  const envUrl = (import.meta.env.VITE_API_URL as string | undefined)?.trim();
+
+  // 检测是否在本地开发环境 (localhost:5173)
+  const isLocalDev = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+  const isViteDev = window.location.port === '5173';
+
+  if (isLocalDev && isViteDev) {
+    return 'http://localhost:3001';
+  }
+
+  return envUrl ? envUrl.replace(/\/$/, '') : '';
 }
 
-/** 数据库：服务端分页，每页最多 100 条 */
+/** Database: server-side pagination, max 100 items per page */
 const fetchDbPage = async (page: number) => {
   const body = {
     ...getRangeBody(),
@@ -73,7 +150,7 @@ const fetchDbPage = async (page: number) => {
     triggeredOnly: showTriggeredOnly.value,
   };
 
-  const response = await fetch('/api/backtest/run', {
+  const response = await fetch(`${resolveApiBase()}/api/backtest/run`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -92,6 +169,7 @@ const fetchDbPage = async (page: number) => {
 
 type ReplayStreamMsg =
   | { type: 'start'; totalPairs: number; startTime: string; endTime: string }
+  | { type: 'heartbeat'; timestamp: string }
   | {
       type: 'progress';
       step: string;
@@ -106,7 +184,9 @@ type ReplayStreamMsg =
       elapsedSec: number;
       percentApprox: number;
       lastPairSignalCount?: number;
+      error?: string;
     }
+  | { type: 'signals'; pairIndex: number; stockA: string; stockB: string; signals: BacktestResult['signals']; cumulativeSignals: number }
   | { type: 'complete'; result: BacktestResult }
   | { type: 'error'; message: string };
 
@@ -122,8 +202,16 @@ const replayProgress = ref<{
   detail: string;
 } | null>(null);
 
-/** 行情重放：NDJSON 流式进度 + 配置 DATABENTO_API_KEY 时后端用 Databento */
+// Stream signals for real-time display
+const streamSignals = ref<BacktestResult['signals']>([]);
+const showStreamResults = ref(false);
+
+/** Market replay: NDJSON streaming with real-time signal display */
 const fetchReplay = async () => {
+  // Reset stream signals
+  streamSignals.value = [];
+  showStreamResults.value = true;
+
   replayProgress.value = {
     totalPairs: 0,
     current: 0,
@@ -133,7 +221,7 @@ const fetchReplay = async () => {
     elapsedSec: 0,
     percentApprox: 0,
     step: 'connecting',
-    detail: '连接服务器…',
+    detail: 'Connecting to server…',
   };
 
   const streamUrl = `${resolveApiBase()}/api/backtest/replay-stream`;
@@ -150,7 +238,7 @@ const fetchReplay = async () => {
 
   const reader = response.body?.getReader();
   if (!reader) {
-    throw new Error('浏览器不支持流式响应');
+    throw new Error('Browser does not support streaming response');
   }
 
   const decoder = new TextDecoder();
@@ -161,21 +249,21 @@ const fetchReplay = async () => {
     let detail = '';
     if (msg.step === 'pair_start') {
       detail =
-        '开始该交易对：将依次拉取两只标的 K 线（Databento 单次请求可能需 1～5 分钟，请看终端 [Databento] 日志）';
+        'Starting this pair: will fetch K-lines for both symbols (Databento single request may take 1-5 minutes, check terminal [Databento] logs)';
     } else if (msg.step === 'symbol') {
       if (msg.subStep === 'symbol_start') {
-        detail = `正在请求 Databento：${msg.symbol ?? ''}（Python 子进程）…`;
+        detail = `Requesting Databento: ${msg.symbol ?? ''} (Python subprocess)…`;
       } else if (msg.subStep === 'symbol_done') {
-        detail = `${msg.symbol ?? ''} 已返回 ${msg.barCount ?? 0} 根 1m K 线`;
+        detail = `${msg.symbol ?? ''} returned ${msg.barCount ?? 0} 1m K-lines`;
       } else if (msg.subStep === 'compute') {
-        detail = '正在计算相关性、成交量分数与信号…';
+        detail = 'Computing correlation, volume scores and signals…';
       } else {
-        detail = '处理中…';
+        detail = 'Processing…';
       }
     } else if (msg.step === 'pair_done') {
-      detail = `本对已完成，生成 ${msg.lastPairSignalCount ?? 0} 条时间点信号`;
+      detail = `Pair completed, generated ${msg.lastPairSignalCount ?? 0} timestamp signals`;
     } else {
-      detail = '处理中…';
+      detail = 'Processing…';
     }
     replayProgress.value = {
       totalPairs: msg.total,
@@ -209,10 +297,16 @@ const fetchReplay = async () => {
           elapsedSec: 0,
           percentApprox: 0,
           step: 'start',
-          detail: `共 ${msg.totalPairs} 对交易对，开始逐对回测…`,
+          detail: `Total ${msg.totalPairs} pairs, starting backtest one by one…`,
         };
       } else if (msg.type === 'progress') {
         applyProgress(msg);
+      } else if (msg.type === 'heartbeat') {
+        // Keepalive message, ignore (just prevents connection timeout)
+        console.log('[replay] heartbeat received');
+      } else if (msg.type === 'signals') {
+        // Real-time signals: append to streamSignals immediately
+        streamSignals.value = [...streamSignals.value, ...msg.signals];
       } else if (msg.type === 'complete') {
         const data = { ...msg.result };
         data.signals = dedupeSignals(data.signals || []);
@@ -244,6 +338,7 @@ const runBacktest = async () => {
   showError.value = false;
   backtestResult.value = null;
   replaySignalsFull.value = [];
+  streamSignals.value = [];
   showTriggeredOnly.value = true;
 
   try {
@@ -328,9 +423,9 @@ const formatTime = (timestamp: string) => {
 };
 
 const getStrategyTypeLabel = (strategyType: string | null) => {
-  if (strategyType === 'positive_lag') return '正相关 (滞后)';
-  if (strategyType === 'negative_corr') return '负相关 (同步)';
-  return '未触发';
+  if (strategyType === 'positive_lag') return 'Positive Correlation (Lag)';
+  if (strategyType === 'negative_corr') return 'Negative Correlation (Sync)';
+  return 'Not Triggered';
 };
 
 const getStrategyTypeClass = (strategyType: string | null) => {
@@ -349,10 +444,10 @@ const tableSignals = computed(() => {
 const listTitleExtra = computed(() => {
   if (backtestMode.value === 'db' && backtestResult.value?.pagination) {
     const { page, totalPages, total } = backtestResult.value.pagination;
-    return `第 ${page}/${totalPages || 1} 页 · 本条件共 ${total} 条`;
+    return `Page ${page}/${totalPages || 1} · Total: ${total} signals`;
   }
   if (backtestMode.value === 'replay' && replaySignalsFull.value.length > 0) {
-    return `第 ${replayPage.value}/${replayTotalPages.value} 页 · 本页最多 ${PAGE_SIZE} 条（前端分页）`;
+    return `Page ${replayPage.value}/${replayTotalPages.value} · Up to ${PAGE_SIZE} per page (frontend pagination)`;
   }
   return '';
 });
@@ -405,54 +500,70 @@ interface BacktestResult {
     <div class="view-header">
       <h1>
         <span class="title-separator">◆</span>
-        回测
+        BACKTEST
         <span class="title-separator">◆</span>
       </h1>
     </div>
 
     <!-- Configuration Form -->
     <div class="config-card">
+      <!-- Market Hours Info -->
+      <div class="market-info-banner">
+        <span class="market-icon">🕐</span>
+        <span class="market-text">
+          US Market Hours: <strong>{{ localMarketHours.open }} - {{ localMarketHours.close }}</strong> ({{ userTimezone }})
+          <span class="market-note">Auto-applied to selected dates</span>
+        </span>
+      </div>
+
       <div class="form-section">
-        <h3>时间范围</h3>
-        <div class="date-range">
+        <h3>Select Trading Days</h3>
+        <div class="date-selector">
           <div class="date-field">
-            <label>开始日期</label>
-            <input type="date" v-model="startDate" />
-          </div>
-          <div class="date-field">
-            <label>开始时间</label>
-            <input type="time" v-model="startTime" />
+            <label>Start Date</label>
+            <select v-model="selectedStartDate" class="date-select">
+              <option v-for="day in tradingDays" :key="day.date" :value="day.date" :disabled="day.isWeekend">
+                {{ day.label }}{{ day.isWeekend ? ' (Weekend)' : '' }}
+              </option>
+            </select>
           </div>
           <div class="separator">→</div>
           <div class="date-field">
-            <label>结束日期</label>
-            <input type="date" v-model="endDate" />
-          </div>
-          <div class="date-field">
-            <label>结束时间</label>
-            <input type="time" v-model="endTime" />
+            <label>End Date</label>
+            <select v-model="selectedEndDate" class="date-select">
+              <option v-for="day in tradingDays" :key="day.date" :value="day.date" :disabled="day.isWeekend">
+                {{ day.label }}{{ day.isWeekend ? ' (Weekend)' : '' }}
+              </option>
+            </select>
           </div>
         </div>
+        <p class="date-hint">
+          Selected range: <strong>{{ selectedStartDate }}</strong> to <strong>{{ selectedEndDate }}</strong>
+          · Market hours ({{ MARKET_OPEN_UTC }} - {{ MARKET_CLOSE_UTC }} UTC) will be used automatically
+        </p>
       </div>
 
       <div class="form-section mode-section">
-        <h3>数据源</h3>
+        <h3>Data Source</h3>
         <div class="mode-row">
           <label class="mode-option">
             <input type="radio" value="db" v-model="backtestMode" />
-            <span>数据库信号（分页查询，每页 {{ PAGE_SIZE }} 条）</span>
+            <span>Database Signals (paginated, {{ PAGE_SIZE }} per page)</span>
           </label>
           <label class="mode-option">
             <input type="radio" value="replay" v-model="backtestMode" />
-            <span>行情重放（配置 DATABENTO_API_KEY 时用 Databento，否则 Yahoo；结果前端分页）</span>
+            <span>Market Replay (Databento if API key configured, otherwise Yahoo)</span>
           </label>
         </div>
+        <p v-if="backtestMode === 'replay'" class="databento-notice">
+          ⚠️ Databento DBEQ.BASIC has ~1 day delay. Today's intraday data may not be available yet.
+        </p>
       </div>
 
       <div class="form-actions">
         <button class="run-btn" @click="runBacktest" :disabled="isLoading">
           <span class="btn-icon">{{ isLoading ? '⏳' : '▶' }}</span>
-          <span class="btn-text">{{ isLoading ? '回测中...' : '运行回测' }}</span>
+          <span class="btn-text">{{ isLoading ? 'Running...' : 'Run Backtest' }}</span>
         </button>
       </div>
     </div>
@@ -468,29 +579,66 @@ interface BacktestResult {
       <template v-if="backtestMode === 'replay' && replayProgress">
         <div class="replay-progress-top">
           <span class="loading-spinner">⏳</span>
-          <span class="replay-title">行情重放回测</span>
+          <span class="replay-title">Market Replay Backtest</span>
         </div>
         <div class="progress-track" role="progressbar" :aria-valuenow="replayProgress.percentApprox" aria-valuemin="0" aria-valuemax="100">
           <div class="progress-fill" :style="{ width: `${replayProgress.percentApprox}%` }" />
         </div>
         <p class="replay-percent">{{ replayProgress.percentApprox }}%</p>
         <p class="replay-main">
-          第 <strong>{{ replayProgress.current }}</strong> / {{ replayProgress.totalPairs }} 对
+          Pair <strong>{{ replayProgress.current }}</strong> / {{ replayProgress.totalPairs }}
           <span v-if="replayProgress.pairLabel" class="replay-pair"> · {{ replayProgress.pairLabel }}</span>
         </p>
         <p class="replay-stats">
-          累计信号 <strong>{{ replayProgress.cumulativeSignals }}</strong> 条
+          Total signals: <strong>{{ replayProgress.cumulativeSignals }}</strong>
           <span v-if="replayProgress.step === 'pair_done' && replayProgress.lastPairSignalCount">
-            · 本对 +{{ replayProgress.lastPairSignalCount }}
+            · This pair +{{ replayProgress.lastPairSignalCount }}
           </span>
-          · 已用时 <strong>{{ replayProgress.elapsedSec }}</strong> 秒
+          · Elapsed: <strong>{{ replayProgress.elapsedSec }}</strong>s
         </p>
         <p class="loading-sub replay-detail">{{ replayProgress.detail }}</p>
+
+        <!-- Streaming Signals Preview -->
+        <div v-if="streamSignals.length > 0" class="stream-signals-preview">
+          <div class="stream-header">
+            <span class="stream-icon">📊</span>
+            <span class="stream-title">Live Signals ({{ streamSignals.length }})</span>
+          </div>
+          <div class="stream-table-container">
+            <table class="stream-table">
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Pair</th>
+                  <th>Score</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="(signal, idx) in streamSignals.slice(-10).reverse()" :key="`stream-${idx}`" class="stream-row">
+                  <td class="stream-time">{{ formatTime(signal.timestamp) }}</td>
+                  <td class="stream-pair">{{ signal.stockA }}/{{ signal.stockB }}</td>
+                  <td class="stream-score">
+                    <span :class="signal.triggered ? 'score-triggered' : 'score-watching'">
+                      {{ signal.totalScore.toFixed(0) }}
+                    </span>
+                  </td>
+                  <td class="stream-status">
+                    <span class="status-pill" :class="signal.triggered ? 'triggered' : 'watching'">
+                      {{ signal.triggered ? '✓' : '○' }}
+                    </span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p class="stream-hint">Showing latest 10 signals (scrolls automatically)</p>
+        </div>
       </template>
       <template v-else>
         <span class="loading-spinner">⏳</span>
-        <p>正在回测...</p>
-        <p class="loading-sub">分析历史信号数据</p>
+        <p>Running backtest...</p>
+        <p class="loading-sub">Analyzing historical signal data</p>
       </template>
     </div>
 
@@ -499,39 +647,39 @@ interface BacktestResult {
       <!-- Summary Cards -->
       <div class="summary-grid">
         <div class="summary-card highlight">
-          <div class="summary-label">总信号数</div>
+          <div class="summary-label">Total Signals</div>
           <div class="summary-value">{{ backtestResult.summary.totalSignals }}</div>
-          <div class="summary-sub">时间范围内</div>
+          <div class="summary-sub">Within time range</div>
         </div>
 
         <div class="summary-card">
-          <div class="summary-label">触发信号</div>
+          <div class="summary-label">Triggered Signals</div>
           <div class="summary-value">{{ backtestResult.summary.triggeredSignals }}</div>
-          <div class="summary-sub">总分≥87</div>
+          <div class="summary-sub">Total score ≥ 87</div>
         </div>
 
         <div class="summary-card">
-          <div class="summary-label">已确认入场</div>
+          <div class="summary-label">Entry Confirmed</div>
           <div class="summary-value">{{ backtestResult.summary.confirmedSignals }}</div>
-          <div class="summary-sub">满足入场条件</div>
+          <div class="summary-sub">Entry conditions met</div>
         </div>
 
         <div class="summary-card">
-          <div class="summary-label">正相关策略</div>
+          <div class="summary-label">Positive Correlation</div>
           <div class="summary-value">{{ backtestResult.summary.positiveLagCount }}</div>
-          <div class="summary-sub">领先/滞后</div>
+          <div class="summary-sub">Leader/Lag strategy</div>
         </div>
 
         <div class="summary-card">
-          <div class="summary-label">负相关策略</div>
+          <div class="summary-label">Negative Correlation</div>
           <div class="summary-value">{{ backtestResult.summary.negativeCorrCount }}</div>
-          <div class="summary-sub">同步联动</div>
+          <div class="summary-sub">Synchronized strategy</div>
         </div>
 
         <div class="summary-card">
-          <div class="summary-label">平均总分</div>
+          <div class="summary-label">Avg Total Score</div>
           <div class="summary-value">{{ backtestResult.summary.avgTotalScore.toFixed(1) }}</div>
-          <div class="summary-sub">所有信号平均</div>
+          <div class="summary-sub">Average of all signals</div>
         </div>
       </div>
 
@@ -539,7 +687,7 @@ interface BacktestResult {
       <div class="signals-card">
         <div class="table-header">
           <h3>
-            信号列表 <span class="list-hint">({{ tableSignals.length }} 条)</span>
+            Signal List <span class="list-hint">({{ tableSignals.length }} signals)</span>
             <span v-if="listTitleExtra" class="list-hint">· {{ listTitleExtra }}</span>
           </h3>
           <button
@@ -548,22 +696,22 @@ interface BacktestResult {
             @click="toggleTriggeredOnly"
           >
             <span class="filter-icon">{{ showTriggeredOnly ? '✓' : '○' }}</span>
-            <span class="filter-text">只显示触发信号</span>
-            <span class="filter-count">(触发：{{ backtestResult.summary.triggeredSignals }} / 总计：{{ backtestResult.summary.totalSignals }})</span>
+            <span class="filter-text">Triggered Only</span>
+            <span class="filter-count">(Triggered: {{ backtestResult.summary.triggeredSignals }} / Total: {{ backtestResult.summary.totalSignals }})</span>
           </button>
         </div>
         <div class="signals-table-container">
           <table v-if="tableSignals.length > 0">
             <thead>
               <tr>
-                <th>时间</th>
-                <th>交易对</th>
-                <th>策略类型</th>
-                <th>相关性分数</th>
-                <th>成交量分数</th>
-                <th>总分</th>
-                <th>领先/滞后</th>
-                <th>状态</th>
+                <th>Time</th>
+                <th>Pair</th>
+                <th>Strategy Type</th>
+                <th>Correlation Score</th>
+                <th>Volume Score</th>
+                <th>Total Score</th>
+                <th>Leader/Lagger</th>
+                <th>Status</th>
               </tr>
             </thead>
             <tbody>
@@ -600,11 +748,11 @@ interface BacktestResult {
                   <span v-if="signal.strategyType === 'positive_lag'">
                     {{ signal.leader }} → {{ signal.lagger }}
                   </span>
-                  <span v-else>同步</span>
+                  <span v-else>Sync</span>
                 </td>
                 <td>
                   <span class="status-badge" :class="{ 'triggered': signal.triggered }">
-                    {{ signal.triggered ? '可交易' : '观察中' }}
+                    {{ signal.triggered ? 'Tradable' : 'Watching' }}
                   </span>
                 </td>
               </tr>
@@ -612,7 +760,7 @@ interface BacktestResult {
           </table>
           <div v-else class="no-signals">
             <span class="no-signals-icon">∅</span>
-            <p>{{ showTriggeredOnly ? '本页无触发信号（可关闭「只显示触发」）' : '暂无信号' }}</p>
+            <p>{{ showTriggeredOnly ? 'No triggered signals on this page (try disabling "Triggered Only" filter)' : 'No signals' }}</p>
           </div>
         </div>
 
@@ -623,7 +771,7 @@ interface BacktestResult {
             :disabled="isLoading || backtestResult.pagination.page <= 1"
             @click="goToDbPage(backtestResult.pagination.page - 1)"
           >
-            上一页
+            Previous
           </button>
           <span class="page-info">
             {{ backtestResult.pagination.page }} / {{ backtestResult.pagination.totalPages || 1 }}
@@ -634,7 +782,7 @@ interface BacktestResult {
             :disabled="isLoading || backtestResult.pagination.page >= backtestResult.pagination.totalPages"
             @click="goToDbPage(backtestResult.pagination.page + 1)"
           >
-            下一页
+            Next
           </button>
         </div>
 
@@ -645,7 +793,7 @@ interface BacktestResult {
             :disabled="replayPage <= 1"
             @click="goToReplayPage(replayPage - 1)"
           >
-            上一页
+            Previous
           </button>
           <span class="page-info">{{ replayPage }} / {{ replayTotalPages }}</span>
           <button
@@ -654,7 +802,7 @@ interface BacktestResult {
             :disabled="replayPage >= replayTotalPages"
             @click="goToReplayPage(replayPage + 1)"
           >
-            下一页
+            Next
           </button>
         </div>
       </div>
@@ -675,12 +823,24 @@ export default {
 </script>
 
 <style scoped>
+/* ═══════════════════════════════════════════════════════════════════════════
+   NEO-TERMINAL BACKTEST VIEW
+   A refined trading terminal aesthetic with modern polish
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=DM+Sans:wght@400;500;600;700&display=swap');
+
 .backtest-view {
   max-width: 1400px;
+  font-family: 'DM Sans', sans-serif;
 }
 
+/* ─────────────────────────────────────────────────────────────────────────────
+   HEADER - Strong typographic presence
+   ───────────────────────────────────────────────────────────────────────────── */
+
 .view-header {
-  margin-bottom: 20px;
+  margin-bottom: 24px;
   display: flex;
   align-items: center;
 }
@@ -688,30 +848,89 @@ export default {
 .view-header h1 {
   display: flex;
   align-items: center;
-  gap: 12px;
-  font-size: 1.3em;
+  gap: 16px;
+  font-size: 1.4em;
   font-weight: 700;
-  color: #1a1a1a;
-  letter-spacing: 2px;
+  color: #0a0a0a;
+  letter-spacing: 3px;
   text-transform: uppercase;
+  font-family: 'DM Sans', sans-serif;
 }
 
 .title-separator {
   color: #c41e3a;
-  font-size: 0.8em;
+  font-size: 0.7em;
+  animation: pulse-glow 2s ease-in-out infinite;
 }
 
-/* Config Card */
+@keyframes pulse-glow {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   CONFIG CARD - Glass morphism with refined borders
+   ───────────────────────────────────────────────────────────────────────────── */
+
 .config-card {
-  background: #ffffff;
-  border: 2px solid #c4c4c4;
-  padding: 20px;
+  background: linear-gradient(135deg, #ffffff 0%, #fafafa 50%, #f5f5f5 100%);
+  border: 1px solid rgba(196, 30, 58, 0.15);
+  padding: 24px 28px;
+  margin-bottom: 24px;
+  box-shadow:
+    0 1px 3px rgba(0,0,0,0.04),
+    0 8px 24px rgba(196, 30, 58, 0.06),
+    inset 0 1px 0 rgba(255,255,255,0.8);
+  border-radius: 8px;
+  position: relative;
+  overflow: hidden;
+}
+
+.config-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, #c41e3a 0%, #e85a6f 50%, #c41e3a 100%);
+  opacity: 0.8;
+}
+
+/* Market Info Banner */
+.market-info-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 18px;
+  background: linear-gradient(135deg, #e8f4f8 0%, #f0f8ff 100%);
+  border: 1px solid #b8d4e8;
+  border-radius: 6px;
   margin-bottom: 20px;
-  box-shadow: 2px 2px 4px rgba(0,0,0,0.04);
+}
+
+.market-icon {
+  font-size: 1.3em;
+}
+
+.market-text {
+  font-size: 0.85em;
+  color: #2c5282;
+}
+
+.market-text strong {
+  color: #1a365d;
+}
+
+.market-note {
+  display: block;
+  font-size: 0.8em;
+  color: #4a6fa5;
+  margin-top: 2px;
 }
 
 .form-section {
-  margin-bottom: 20px;
+  margin-bottom: 24px;
 }
 
 .form-section:last-of-type {
@@ -719,69 +938,126 @@ export default {
 }
 
 .form-section h3 {
-  font-size: 0.7em;
-  font-weight: 700;
-  color: #5a5a5a;
-  letter-spacing: 0.5px;
+  font-size: 0.72em;
+  font-weight: 600;
+  color: #3a3a3a;
+  letter-spacing: 1px;
   text-transform: uppercase;
-  margin: 0 0 12px 0;
-  padding-bottom: 8px;
-  border-bottom: 1px solid #c4c4c4;
+  margin: 0 0 14px 0;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #e5e5e5;
+  font-family: 'DM Sans', sans-serif;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
-.date-range {
+.form-section h3::before {
+  content: '◇';
+  color: #c41e3a;
+  font-size: 0.8em;
+}
+
+.date-selector {
   display: flex;
   align-items: flex-end;
-  gap: 16px;
+  gap: 20px;
   flex-wrap: wrap;
+}
+
+.date-selector .separator {
+  padding-bottom: 10px;
+}
+
+.date-hint {
+  margin-top: 12px;
+  font-size: 0.75em;
+  color: #5a5a5a;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.date-hint strong {
+  color: #1a1a1a;
 }
 
 .date-field {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
 }
 
 .date-field label {
-  font-size: 0.65em;
-  font-weight: 700;
+  font-size: 0.68em;
+  font-weight: 600;
   color: #5a5a5a;
   text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
 
-.date-field input {
-  padding: 8px 12px;
-  border: 1px solid #c4c4c4;
-  font-family: 'Courier New', Courier, monospace;
-  font-size: 0.9em;
+.date-select {
+  padding: 10px 14px;
+  border: 1px solid #d5d5d5;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.88em;
   background: #ffffff;
   color: #1a1a1a;
+  border-radius: 4px;
+  transition: all 0.2s ease;
+  box-shadow: inset 0 1px 2px rgba(0,0,0,0.04);
+}
+
+.date-field input:focus {
+  outline: none;
+  border-color: #c41e3a;
+  box-shadow:
+    inset 0 1px 2px rgba(0,0,0,0.04),
+    0 0 0 3px rgba(196, 30, 58, 0.12);
 }
 
 .separator {
-  font-size: 1.5em;
-  color: #c4c4c4;
+  font-size: 1.4em;
+  color: #c41e3a;
   line-height: 1;
-  padding-bottom: 4px;
+  padding-bottom: 6px;
+  opacity: 0.6;
 }
 
 .mode-section .mode-row {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
 }
 
 .mode-option {
   display: flex;
   align-items: center;
-  gap: 10px;
-  font-size: 0.85em;
-  color: #1a1a1a;
+  gap: 12px;
+  font-size: 0.86em;
+  color: #2a2a2a;
   cursor: pointer;
+  padding: 8px 12px;
+  border-radius: 4px;
+  transition: background 0.2s ease;
+}
+
+.mode-option:hover {
+  background: rgba(196, 30, 58, 0.04);
 }
 
 .mode-option input {
   accent-color: #c41e3a;
+  width: 16px;
+  height: 16px;
+}
+
+.databento-notice {
+  margin-top: 12px;
+  padding: 10px 14px;
+  background: #fffbeb;
+  border: 1px solid #fcd34d;
+  border-radius: 6px;
+  font-size: 0.85em;
+  color: #92400e;
 }
 
 .list-hint {
@@ -792,325 +1068,573 @@ export default {
   letter-spacing: 0;
 }
 
-.pagination-bar {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 16px;
-  margin-top: 16px;
-  padding-top: 16px;
-  border-top: 1px solid #ebebe6;
-}
-
-.page-btn {
-  padding: 8px 16px;
-  border: 2px solid #c4c4c4;
-  background: #fff;
-  font-family: 'Courier New', Courier, monospace;
-  font-size: 0.75em;
-  font-weight: 700;
-  letter-spacing: 0.5px;
-  text-transform: uppercase;
-  cursor: pointer;
-  color: #1a1a1a;
-}
-
-.page-btn:hover:not(:disabled) {
-  border-color: #c41e3a;
-  color: #c41e3a;
-}
-
-.page-btn:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-
-.page-info {
-  font-family: 'Courier New', Courier, monospace;
-  font-size: 0.85em;
-  color: #5a5a5a;
-  min-width: 5em;
-  text-align: center;
-}
+/* ─────────────────────────────────────────────────────────────────────────────
+   ACTION BUTTON - Bold, confident presence
+   ───────────────────────────────────────────────────────────────────────────── */
 
 .form-actions {
   display: flex;
   justify-content: flex-end;
-  margin-top: 20px;
-  padding-top: 20px;
-  border-top: 1px solid #c4c4c4;
+  margin-top: 24px;
+  padding-top: 24px;
+  border-top: 1px solid #e5e5e5;
 }
 
 .run-btn {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 12px 24px;
-  background: #c41e3a;
+  gap: 12px;
+  padding: 14px 28px;
+  background: linear-gradient(135deg, #c41e3a 0%, #a51832 100%);
   border: none;
   color: #ffffff;
-  font-family: 'Courier New', Courier, monospace;
-  font-size: 0.9em;
-  font-weight: 700;
-  letter-spacing: 1px;
+  font-family: 'DM Sans', sans-serif;
+  font-size: 0.92em;
+  font-weight: 600;
+  letter-spacing: 1.5px;
   text-transform: uppercase;
   cursor: pointer;
-  box-shadow: 2px 2px 4px rgba(0,0,0,0.1);
-  transition: all 0.2s ease;
+  box-shadow:
+    0 2px 8px rgba(196, 30, 58, 0.3),
+    0 8px 24px rgba(196, 30, 58, 0.15),
+    inset 0 1px 0 rgba(255,255,255,0.15);
+  border-radius: 6px;
+  transition: all 0.3s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.run-btn::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
+  transition: left 0.5s ease;
+}
+
+.run-btn:hover:not(:disabled)::before {
+  left: 100%;
 }
 
 .run-btn:hover:not(:disabled) {
-  background: #a01830;
-  box-shadow: 3px 3px 6px rgba(0,0,0,0.15);
+  transform: translateY(-2px);
+  box-shadow:
+    0 4px 12px rgba(196, 30, 58, 0.35),
+    0 12px 32px rgba(196, 30, 58, 0.2),
+    inset 0 1px 0 rgba(255,255,255,0.15);
+}
+
+.run-btn:active:not(:disabled) {
+  transform: translateY(0);
 }
 
 .run-btn:disabled {
-  opacity: 0.6;
+  opacity: 0.5;
   cursor: not-allowed;
+  background: linear-gradient(135deg, #888 0%, #666 100%);
 }
 
 .btn-icon {
-  font-size: 1.2em;
+  font-size: 1.1em;
 }
 
-/* Error & Loading */
+/* ─────────────────────────────────────────────────────────────────────────────
+   ERROR & LOADING STATES
+   ───────────────────────────────────────────────────────────────────────────── */
+
 .error-card {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 16px 20px;
-  background: #f8d7da;
-  border: 1px solid #c41e3a;
-  color: #721c24;
-  margin-bottom: 20px;
+  gap: 14px;
+  padding: 18px 24px;
+  background: linear-gradient(135deg, #fff5f5 0%, #fee2e2 100%);
+  border: 1px solid #fecaca;
+  color: #991b1b;
+  margin-bottom: 24px;
+  border-radius: 6px;
+  box-shadow: 0 2px 8px rgba(153, 27, 27, 0.08);
 }
 
 .error-icon {
-  font-size: 1.3em;
+  font-size: 1.4em;
+  animation: shake 0.5s ease-in-out;
+}
+
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-4px); }
+  75% { transform: translateX(4px); }
 }
 
 .error-message {
   font-weight: 600;
+  font-size: 0.95em;
 }
 
 .loading-card {
-  background: #ffffff;
-  border: 1px solid #c4c4c4;
-  padding: 60px 20px;
+  background: linear-gradient(135deg, #ffffff 0%, #fafafa 100%);
+  border: 1px solid #e5e5e5;
+  padding: 80px 24px;
   text-align: center;
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.04);
 }
 
 .loading-spinner {
-  font-size: 2.5em;
+  font-size: 3em;
   display: block;
-  margin-bottom: 16px;
-  opacity: 0.4;
+  margin-bottom: 20px;
+  animation: spin 1.5s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 
 .loading-card p {
   color: #5a5a5a;
   font-size: 0.95em;
   text-transform: uppercase;
-  letter-spacing: 0.5px;
-  margin: 8px 0;
+  letter-spacing: 1px;
+  margin: 10px 0;
+  font-weight: 500;
 }
 
 .loading-sub {
   color: #8b8b8b;
   font-size: 0.85em;
+  font-weight: 400;
 }
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   REPLAY PROGRESS - Animated progress visualization
+   ───────────────────────────────────────────────────────────────────────────── */
 
 .replay-progress-top {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 12px;
-  margin-bottom: 20px;
+  gap: 14px;
+  margin-bottom: 24px;
 }
 
 .replay-title {
-  font-weight: 700;
-  letter-spacing: 1px;
+  font-weight: 600;
+  letter-spacing: 1.5px;
   color: #1a1a1a;
-  font-size: 0.95em;
+  font-size: 0.98em;
+  text-transform: uppercase;
 }
 
 .progress-track {
-  height: 10px;
-  background: #ebebe6;
-  border: 1px solid #c4c4c4;
-  max-width: 420px;
-  margin: 0 auto 12px;
+  height: 12px;
+  background: linear-gradient(to right, #e5e5e5, #f0f0f0);
+  border: 1px solid #d5d5d5;
+  max-width: 480px;
+  margin: 0 auto 16px;
+  border-radius: 6px;
+  overflow: hidden;
+  position: relative;
+}
+
+.progress-track::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: repeating-linear-gradient(
+    90deg,
+    transparent,
+    transparent 20px,
+    rgba(255,255,255,0.1) 20px,
+    rgba(255,255,255,0.1) 21px
+  );
 }
 
 .progress-fill {
   height: 100%;
-  background: linear-gradient(90deg, #c41e3a, #e85a6f);
-  transition: width 0.25s ease;
+  background: linear-gradient(90deg, #c41e3a 0%, #e85a6f 60%, #f08a7e 100%);
+  transition: width 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+  position: relative;
+  overflow: hidden;
+}
+
+.progress-fill::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255,255,255,0.3) 50%,
+    transparent 100%
+  );
+  animation: shimmer 1.5s infinite;
+}
+
+@keyframes shimmer {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
 }
 
 .replay-percent {
-  font-family: 'Courier New', Courier, monospace;
-  font-size: 1.1em;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 1.2em;
   font-weight: 700;
   color: #c41e3a;
-  margin: 0 0 12px 0;
+  margin: 0 0 16px 0;
   text-transform: none;
   letter-spacing: 0;
 }
 
 .replay-main {
-  color: #1a1a1a;
-  font-size: 0.95em;
-  margin: 8px 0;
+  color: #2a2a2a;
+  font-size: 0.98em;
+  margin: 10px 0;
   text-transform: none;
   letter-spacing: 0;
+  font-weight: 500;
 }
 
 .replay-pair {
-  font-family: 'Courier New', Courier, monospace;
+  font-family: 'JetBrains Mono', monospace;
   font-weight: 600;
+  color: #c41e3a;
 }
 
 .replay-stats {
   color: #5a5a5a;
   font-size: 0.88em;
-  margin: 8px 0;
+  margin: 10px 0;
   text-transform: none;
   letter-spacing: 0;
+  font-family: 'JetBrains Mono', monospace;
 }
 
 .replay-detail {
-  max-width: 520px;
-  margin: 12px auto 0;
-  line-height: 1.5;
+  max-width: 560px;
+  margin: 16px auto 0;
+  line-height: 1.6;
+  font-size: 0.88em;
+  color: #7a7a7a;
 }
 
-/* Results */
+/* ─────────────────────────────────────────────────────────────────────────────
+   STREAM SIGNALS PREVIEW - Real-time signal display during replay
+   ───────────────────────────────────────────────────────────────────────────── */
+
+.stream-signals-preview {
+  margin-top: 32px;
+  background: #f8f9fa;
+  border: 1px solid #e5e5e5;
+  border-radius: 8px;
+  padding: 16px;
+  max-width: 600px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.stream-header {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.stream-icon {
+  font-size: 1.2em;
+}
+
+.stream-title {
+  font-weight: 600;
+  font-size: 0.9em;
+  color: #333;
+  letter-spacing: 0.5px;
+}
+
+.stream-table-container {
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.stream-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85em;
+}
+
+.stream-table th {
+  padding: 8px 12px;
+  text-align: left;
+  font-weight: 600;
+  color: #5a5a5a;
+  border-bottom: 1px solid #ddd;
+  font-size: 0.8em;
+  letter-spacing: 0.5px;
+}
+
+.stream-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid #eee;
+}
+
+.stream-row {
+  animation: fadeInRow 0.3s ease;
+}
+
+@keyframes fadeInRow {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.stream-time {
+  font-family: 'JetBrains Mono', monospace;
+  color: #333;
+}
+
+.stream-pair {
+  font-weight: 500;
+  color: #c41e3a;
+}
+
+.stream-score {
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 600;
+}
+
+.score-triggered {
+  color: #16a34a;
+}
+
+.score-watching {
+  color: #8b8b8b;
+}
+
+.stream-status {
+  text-align: center;
+}
+
+.status-pill {
+  display: inline-block;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  line-height: 20px;
+  text-align: center;
+  font-size: 0.8em;
+}
+
+.status-pill.triggered {
+  background: #16a34a;
+  color: white;
+}
+
+.status-pill.watching {
+  background: #e5e5e5;
+  color: #8b8b8b;
+}
+
+.stream-hint {
+  text-align: center;
+  font-size: 0.75em;
+  color: #8b8b8b;
+  margin-top: 12px;
+  font-style: italic;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   RESULTS - Elegant data presentation
+   ───────────────────────────────────────────────────────────────────────────── */
+
 .results-container {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 24px;
 }
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   SUMMARY GRID - Dashboard-style metrics
+   ───────────────────────────────────────────────────────────────────────────── */
 
 .summary-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 20px;
 }
 
 .summary-card {
-  background: #ffffff;
-  border: 1px solid #c4c4c4;
-  padding: 16px;
+  background: linear-gradient(135deg, #ffffff 0%, #fafafa 100%);
+  border: 1px solid #e5e5e5;
+  padding: 20px 24px;
   display: flex;
   flex-direction: column;
   align-items: center;
   text-align: center;
-  box-shadow: 2px 2px 4px rgba(0,0,0,0.04);
+  box-shadow:
+    0 2px 8px rgba(0,0,0,0.04),
+    0 8px 24px rgba(0,0,0,0.02);
+  border-radius: 8px;
+  transition: all 0.3s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.summary-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, #e5e5e5 0%, #d5d5d5 100%);
+}
+
+.summary-card:hover {
+  transform: translateY(-4px);
+  box-shadow:
+    0 4px 16px rgba(0,0,0,0.06),
+    0 16px 48px rgba(0,0,0,0.04);
 }
 
 .summary-card.highlight {
-  border-color: #c41e3a;
-  background: #f8f8f8;
+  border-color: rgba(196, 30, 58, 0.3);
+  background: linear-gradient(135deg, #fff8f8 0%, #fff0f0 100%);
+}
+
+.summary-card.highlight::before {
+  background: linear-gradient(90deg, #c41e3a 0%, #e85a6f 50%, #c41e3a 100%);
 }
 
 .summary-label {
-  font-size: 0.65em;
-  font-weight: 700;
+  font-size: 0.68em;
+  font-weight: 600;
   color: #5a5a5a;
   text-transform: uppercase;
-  letter-spacing: 0.5px;
-  margin-bottom: 8px;
+  letter-spacing: 1px;
+  margin-bottom: 12px;
+  font-family: 'DM Sans', sans-serif;
 }
 
 .summary-value {
-  font-size: 1.5em;
+  font-size: 2.2em;
   font-weight: 700;
-  font-family: 'Courier New', Courier, monospace;
+  font-family: 'JetBrains Mono', monospace;
   color: #1a1a1a;
+  line-height: 1;
+}
+
+.summary-card.highlight .summary-value {
+  color: #c41e3a;
 }
 
 .summary-sub {
-  font-size: 0.75em;
+  font-size: 0.78em;
   color: #8b8b8b;
-  margin-top: 4px;
+  margin-top: 8px;
+  font-weight: 400;
 }
 
-/* Signals Table */
+/* ─────────────────────────────────────────────────────────────────────────────
+   SIGNALS TABLE - Clean data grid
+   ───────────────────────────────────────────────────────────────────────────── */
+
 .signals-card {
   background: #ffffff;
-  border: 1px solid #c4c4c4;
-  padding: 20px;
+  border: 1px solid #e5e5e5;
+  padding: 24px;
+  border-radius: 8px;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.04);
 }
 
 .table-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 16px;
-  padding-bottom: 12px;
-  border-bottom: 1px solid #c4c4c4;
+  margin-bottom: 20px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid #e5e5e5;
 }
 
 .table-header h3 {
-  font-size: 0.75em;
-  font-weight: 700;
-  color: #5a5a5a;
-  letter-spacing: 0.5px;
+  font-size: 0.78em;
+  font-weight: 600;
+  color: #3a3a3a;
+  letter-spacing: 1px;
   text-transform: uppercase;
   margin: 0;
+  font-family: 'DM Sans', sans-serif;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.table-header h3::before {
+  content: '◇';
+  color: #c41e3a;
+  font-size: 0.9em;
 }
 
 .filter-btn {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 12px;
+  gap: 10px;
+  padding: 8px 16px;
   background: #ffffff;
-  border: 2px solid #c4c4c4;
+  border: 1px solid #d5d5d5;
   cursor: pointer;
-  font-family: 'Courier New', Courier, monospace;
-  font-size: 0.7em;
-  font-weight: 700;
+  font-family: 'DM Sans', sans-serif;
+  font-size: 0.72em;
+  font-weight: 600;
   letter-spacing: 0.5px;
   text-transform: uppercase;
   color: #5a5a5a;
-  box-shadow: 2px 2px 4px rgba(0,0,0,0.04);
+  box-shadow: 0 1px 4px rgba(0,0,0,0.04);
   transition: all 0.2s ease;
+  border-radius: 4px;
 }
 
 .filter-btn:hover {
-  border-color: #8b8b8b;
-  background: #f5f5f0;
+  border-color: #b5b5b5;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.06);
 }
 
 .filter-btn.active {
   border-color: #c41e3a;
-  background: #c41e3a;
+  background: linear-gradient(135deg, #c41e3a 0%, #a51832 100%);
   color: #ffffff;
+  box-shadow: 0 2px 8px rgba(196, 30, 58, 0.2);
 }
 
 .filter-icon {
-  font-size: 1.2em;
+  font-size: 1.1em;
   line-height: 1;
 }
 
 .filter-count {
   color: #8b8b8b;
-  font-size: 0.9em;
+  font-size: 0.92em;
   font-weight: 400;
   text-transform: none;
-  margin-left: 8px;
+  margin-left: 10px;
 }
 
 .filter-btn.active .filter-count {
-  color: #e0e0e0;
+  color: rgba(255,255,255,0.7);
 }
 
 .signals-card h3 {
   font-size: 0.75em;
-  font-weight: 700;
+  font-weight: 600;
   color: #5a5a5a;
   letter-spacing: 0.5px;
   text-transform: uppercase;
@@ -1119,6 +1643,8 @@ export default {
 
 .signals-table-container {
   overflow-x: auto;
+  border-radius: 6px;
+  border: 1px solid #e5e5e5;
 }
 
 table {
@@ -1128,164 +1654,264 @@ table {
 
 th {
   text-align: left;
-  font-size: 0.65em;
+  font-size: 0.68em;
   text-transform: uppercase;
-  color: #5a5a5a;
-  font-weight: 700;
-  letter-spacing: 0.5px;
-  padding: 10px 12px;
-  background: #ebebe6;
-  border-bottom: 2px solid #1a1a1a;
+  color: #3a3a3a;
+  font-weight: 600;
+  letter-spacing: 1px;
+  padding: 14px 16px;
+  background: linear-gradient(to bottom, #f8f8f8, #f0f0f0);
+  border-bottom: 1px solid #d5d5d5;
+  font-family: 'DM Sans', sans-serif;
 }
 
 td {
-  padding: 10px 12px;
-  border-bottom: 1px solid #ebebe6;
-  font-size: 0.85em;
+  padding: 14px 16px;
+  border-bottom: 1px solid #eaeaea;
+  font-size: 0.88em;
+  transition: background 0.15s ease;
+}
+
+tr:hover td {
+  background: rgba(196, 30, 58, 0.02);
 }
 
 .time-cell {
-  color: #8b8b8b;
-  font-family: 'Courier New', Courier, monospace;
-  font-size: 0.8em;
+  color: #7a7a7a;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.82em;
   white-space: nowrap;
+  font-weight: 500;
 }
 
 .pair-cell {
-  min-width: 180px;
+  min-width: 200px;
 }
 
 .pair-box {
   display: flex;
   align-items: center;
-  gap: 4px;
-  background: #ebebe6;
-  padding: 4px 8px;
-  border-radius: 2px;
+  gap: 6px;
+  background: linear-gradient(135deg, #f5f5f5 0%, #ebebe6 100%);
+  padding: 6px 12px;
+  border-radius: 4px;
   width: fit-content;
+  border: 1px solid #e5e5e5;
 }
 
 .pair-a, .pair-b {
-  font-weight: 700;
-  font-family: 'Courier New', Courier, monospace;
+  font-weight: 600;
+  font-family: 'JetBrains Mono', monospace;
   color: #1a1a1a;
-  font-size: 0.9em;
+  font-size: 0.92em;
 }
 
 .pair-vs {
   color: #8b8b8b;
-  font-size: 0.8em;
+  font-size: 0.85em;
+  opacity: 0.6;
 }
 
-/* Type Badge */
+/* ─────────────────────────────────────────────────────────────────────────────
+   TYPE BADGE - Color-coded strategy indicators
+   ───────────────────────────────────────────────────────────────────────────── */
+
 .type-badge {
-  display: inline-block;
-  padding: 4px 10px;
-  border-radius: 3px;
-  font-size: 0.7em;
-  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 4px;
+  font-size: 0.72em;
+  font-weight: 600;
   letter-spacing: 0.5px;
   text-transform: uppercase;
   border: 1px solid;
+  font-family: 'DM Sans', sans-serif;
 }
 
 .type-badge.type-lag {
-  background: #d1ecf1;
-  color: #0056b3;
-  border-color: #b8d9e8;
+  background: linear-gradient(135deg, #e0f2fe 0%, #bae6fd 100%);
+  color: #0369a1;
+  border-color: #7dd3fc;
 }
 
 .type-badge.type-neg {
-  background: #f8d7da;
-  color: #721c24;
-  border-color: #f5c6cb;
+  background: linear-gradient(135deg, #fce7f3 0%, #fbcfe8 100%);
+  color: #9f1239;
+  border-color: #f9a8d4;
 }
 
-/* Score Display */
+/* ─────────────────────────────────────────────────────────────────────────────
+   SCORE DISPLAY - Visual score representation
+   ───────────────────────────────────────────────────────────────────────────── */
+
 .score-display {
-  display: inline-block;
-  padding: 3px 8px;
-  border: 1px solid #c4c4c4;
-  border-radius: 2px;
-  font-family: 'Courier New', Courier, monospace;
-  font-size: 0.85em;
-  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border: 1px solid #e5e5e5;
+  border-radius: 4px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.88em;
+  font-weight: 600;
+  background: #fafafa;
 }
 
-/* Total Score */
+/* ─────────────────────────────────────────────────────────────────────────────
+   TOTAL SCORE - Gradient score badges
+   ───────────────────────────────────────────────────────────────────────────── */
+
 .total-score {
-  display: inline-block;
-  padding: 4px 10px;
-  border-radius: 3px;
-  font-size: 0.85em;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  padding: 6px 12px;
+  border-radius: 4px;
+  font-size: 0.88em;
   font-weight: 700;
-  font-family: 'Courier New', Courier, monospace;
-  border: 1px solid;
+  font-family: 'JetBrains Mono', monospace;
+  border: none;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.1);
 }
 
 .total-score.score-high {
-  background: #28a745;
+  background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
   color: #fff;
-  border-color: #1e7e34;
 }
 
 .total-score.score-medium {
-  background: #ffc107;
+  background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%);
   color: #1a1a1a;
-  border-color: #e0a800;
 }
 
 .total-score.score-low {
-  background: #dc3545;
+  background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
   color: #fff;
-  border-color: #bd2130;
 }
 
 .leadlag-cell {
-  font-size: 0.75em;
-  color: #5a5a5a;
+  font-size: 0.78em;
+  color: #4a4a4a;
   font-weight: 600;
   white-space: nowrap;
+  font-family: 'JetBrains Mono', monospace;
 }
 
-/* Status Badge */
+/* ─────────────────────────────────────────────────────────────────────────────
+   STATUS BADGE - State indicators
+   ───────────────────────────────────────────────────────────────────────────── */
+
 .status-badge {
-  display: inline-block;
-  padding: 3px 8px;
-  border-radius: 2px;
-  font-size: 0.65em;
-  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 4px;
+  font-size: 0.68em;
+  font-weight: 600;
   letter-spacing: 0.5px;
   text-transform: uppercase;
-  background: #ebebe6;
+  background: linear-gradient(135deg, #f5f5f5 0%, #ebebe6 100%);
   color: #5a5a5a;
-  border: 1px solid #c4c4c4;
+  border: 1px solid #d5d5d5;
+  font-family: 'DM Sans', sans-serif;
+}
+
+.status-badge::before {
+  content: '○';
+  font-size: 0.9em;
 }
 
 .status-badge.triggered {
-  background: #c41e3a;
+  background: linear-gradient(135deg, #c41e3a 0%, #a51832 100%);
   color: #fff;
-  border-color: #8b1e2a;
+  border-color: transparent;
+  box-shadow: 0 2px 6px rgba(196, 30, 58, 0.2);
 }
 
-/* No Signals */
+.status-badge.triggered::before {
+  content: '●';
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   NO SIGNALS - Empty state
+   ───────────────────────────────────────────────────────────────────────────── */
+
 .no-signals {
   text-align: center;
-  padding: 40px 20px;
+  padding: 60px 24px;
 }
 
 .no-signals-icon {
-  font-size: 3em;
-  color: #c4c4c4;
+  font-size: 4em;
+  color: #d5d5d5;
   display: block;
-  margin-bottom: 12px;
-  opacity: 0.4;
+  margin-bottom: 16px;
+  opacity: 0.3;
 }
 
 .no-signals p {
   color: #8b8b8b;
-  font-size: 0.9em;
+  font-size: 0.92em;
   text-transform: uppercase;
+  letter-spacing: 1px;
+  font-weight: 500;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   PAGINATION - Navigation controls
+   ───────────────────────────────────────────────────────────────────────────── */
+
+.pagination-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  margin-top: 20px;
+  padding-top: 20px;
+  border-top: 1px solid #e5e5e5;
+}
+
+.page-btn {
+  padding: 10px 20px;
+  border: 1px solid #d5d5d5;
+  background: linear-gradient(135deg, #ffffff 0%, #fafafa 100%);
+  font-family: 'DM Sans', sans-serif;
+  font-size: 0.78em;
+  font-weight: 600;
   letter-spacing: 0.5px;
+  text-transform: uppercase;
+  cursor: pointer;
+  color: #3a3a3a;
+  border-radius: 4px;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.04);
+  transition: all 0.2s ease;
+}
+
+.page-btn:hover:not(:disabled) {
+  border-color: #c41e3a;
+  color: #c41e3a;
+  box-shadow: 0 2px 8px rgba(196, 30, 58, 0.1);
+}
+
+.page-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  background: #f5f5f5;
+}
+
+.page-info {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.88em;
+  color: #3a3a3a;
+  min-width: 6em;
+  text-align: center;
+  font-weight: 600;
+  padding: 8px 16px;
+  background: #f5f5f5;
+  border-radius: 4px;
 }
 </style>

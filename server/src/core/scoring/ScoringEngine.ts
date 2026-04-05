@@ -44,11 +44,12 @@ export class ScoringEngine {
     currentVolumeA: number,
     avgVolumeA: number,
     currentVolumeB: number,
-    avgVolumeB: number
+    avgVolumeB: number,
+    maxLag: number = 10 // Default lag intervals
   ): PairScore {
     console.log(`[ScoringEngine] THRESHOLD=${this.THRESHOLD}`);
     // Debug: log returns data
-    console.log(`[ScoringEngine] ${stockA}/${stockB}: returnsA.length=${returnsA.length}, returnsB.length=${returnsB.length}`);
+    console.log(`[ScoringEngine] ${stockA}/${stockB}: returnsA.length=${returnsA.length}, returnsB.length=${returnsB.length}, maxLag=${maxLag}`);
     if (returnsA.length > 0) {
       console.log(`[ScoringEngine] ${stockA}: returnsA sample=[${returnsA.slice(0, 5).map(r => r.toFixed(6)).join(', ')}]`);
     }
@@ -59,9 +60,9 @@ export class ScoringEngine {
       console.error(`[ScoringEngine] ${stockA}/${stockB}: NaN or Infinity detected in returns!`);
     }
 
-    // Calculate correlations
+    // Calculate correlations with custom max lag
     const syncResult = SyncCorrelation.calculate(returnsA, returnsB);
-    const lagResult = LagCorrelation.calculate(returnsA, returnsB);
+    const lagResult = LagCorrelation.calculate(returnsA, returnsB, maxLag);
 
     console.log(`[ScoringEngine] ${stockA}/${stockB}: syncResult.correlation=${syncResult.correlation}, syncScore=${SyncCorrelation.calculateScore(syncResult.correlation)}`);
 

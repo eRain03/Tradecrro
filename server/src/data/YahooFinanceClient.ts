@@ -49,6 +49,12 @@ export class YahooFinanceClient {
       const yahooSymbol = this.normalizeSymbol(symbol);
 
       const result: any = await YahooFinanceClient.client.quote(yahooSymbol);
+
+      // Handle undefined or invalid results (delisted/invalid symbols)
+      if (!result || result.regularMarketPrice === undefined) {
+        throw new Error(`No market data available for ${symbol} (may be delisted or invalid)`);
+      }
+
       const marketPrice = result.regularMarketPrice ?? 0;
       const bid = result.bid ?? marketPrice;
       const ask = result.ask ?? marketPrice;

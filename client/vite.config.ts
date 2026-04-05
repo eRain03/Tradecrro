@@ -16,10 +16,13 @@ export default defineConfig({
     },
   },
   server: {
+    host: true,
+    allowedHosts: true,
     proxy: {
       '/api': {
         target: 'http://localhost:3001',
         changeOrigin: true,
+        timeout: 600000, // 10 minutes for long-running backtest
       },
     },
   },

@@ -1,9 +1,14 @@
 <script setup lang="ts">
-import { onMounted } from 'vue';
+import { onMounted, ref, computed } from 'vue';
 import { useTradingStore } from '../stores/trading';
 import wsClient from '../api/websocket';
 
 const store = useTradingStore();
+
+// Animation triggers
+const showContent = ref(false);
+const showCards = ref(false);
+const showLinks = ref(false);
 
 onMounted(() => {
   store.fetchPairs();
@@ -14,161 +19,238 @@ onMounted(() => {
   wsClient.onSignal((signal) => {
     store.addSignal(signal);
   });
+
+  // Staggered animations
+  setTimeout(() => showContent.value = true, 100);
+  setTimeout(() => showCards.value = true, 300);
+  setTimeout(() => showLinks.value = true, 500);
 });
+
+const statusCards = computed(() => [
+  { icon: '📊', label: 'Pairs Monitored', value: store.pairs.length, class: '' },
+  { icon: '🚨', label: 'Signals Today', value: store.signals.length, class: '' },
+  { icon: '📈', label: 'Open Positions', value: store.openTrades.length, class: '' },
+  { icon: '⚡', label: 'System Status', value: 'ONLINE', class: 'online' },
+]);
+
+const systemInfo = [
+  { icon: '📡', title: 'Data Source', value: 'Databento', detail: 'Market data provider' },
+  { icon: '🎯', title: 'Strategy', value: 'Statistical Arbitrage', detail: 'Correlation-based trading' },
+  { icon: '⏱️', title: 'Sampling', value: '30s Interval', detail: '30m lookback window' },
+];
+
+const quickLinks = [
+  { path: '/signals', icon: '🚨', text: 'View Signals' },
+  { path: '/pairs', icon: '📊', text: 'Trading Pairs' },
+  { path: '/trades', icon: '📈', text: 'Positions' },
+  { path: '/backtest', icon: '🔬', text: 'Backtest' },
+  { path: '/settings', icon: '⚙️', text: 'Settings' },
+];
 </script>
 
 <template>
   <div class="home">
-    <div class="welcome-banner">
-      <h1>STATARB TRADING SYSTEM</h1>
-      <p class="subtitle">Statistical Arbitrage & Correlation Trading</p>
-    </div>
+    <transition name="fade-down">
+      <div class="welcome-banner" v-show="showContent">
+        <div class="banner-decoration"></div>
+        <h1>NEXUS TRADING SYSTEM</h1>
+        <p class="subtitle">Statistical Arbitrage & Correlation Trading</p>
+        <div class="banner-line"></div>
+      </div>
+    </transition>
 
-    <div class="status-grid">
-      <div class="status-card">
-        <div class="status-icon">📊</div>
+    <transition-group name="card-stagger" tag="div" class="status-grid">
+      <div class="status-card" v-for="(card, index) in statusCards" :key="card.label" v-show="showCards" :style="{ '--delay': index * 0.1 + 's' }">
+        <div class="status-icon">{{ card.icon }}</div>
         <div class="status-info">
-          <span class="status-label">Pairs Monitored</span>
-          <span class="status-value">{{ store.pairs.length }}</span>
+          <span class="status-label">{{ card.label }}</span>
+          <span class="status-value" :class="card.class">{{ card.value }}</span>
+        </div>
+        <div class="card-shine"></div>
+      </div>
+    </transition-group>
+
+    <transition name="fade-up">
+      <div class="info-section" v-show="showContent">
+        <h2>SYSTEM OVERVIEW</h2>
+        <div class="info-grid">
+          <div class="info-card" v-for="info in systemInfo" :key="info.title">
+            <div class="info-icon">{{ info.icon }}</div>
+            <h3>{{ info.title }}</h3>
+            <p>{{ info.value }}</p>
+            <p class="info-detail">{{ info.detail }}</p>
+          </div>
         </div>
       </div>
+    </transition>
 
-      <div class="status-card">
-        <div class="status-icon">🚨</div>
-        <div class="status-info">
-          <span class="status-label">Signals Today</span>
-          <span class="status-value">{{ store.signals.length }}</span>
+    <transition-group name="link-stagger" tag="div" class="quick-links">
+      <RouterLink v-for="(link, index) in quickLinks" :key="link.path" :to="link.path" class="quick-link" v-show="showLinks" :style="{ '--delay': index * 0.08 + 's' }">
+        <div class="link-icon-wrapper">
+          <span class="link-icon">{{ link.icon }}</span>
         </div>
-      </div>
-
-      <div class="status-card">
-        <div class="status-icon">📈</div>
-        <div class="status-info">
-          <span class="status-label">Open Positions</span>
-          <span class="status-value">{{ store.openTrades.length }}</span>
+        <div class="link-content">
+          <span class="link-text">{{ link.text }}</span>
+          <span class="link-arrow">→</span>
         </div>
-      </div>
-
-      <div class="status-card">
-        <div class="status-icon">⚙️</div>
-        <div class="status-info">
-          <span class="status-label">System Status</span>
-          <span class="status-value online">ONLINE</span>
-        </div>
-      </div>
-    </div>
-
-    <div class="info-section">
-      <h2>SYSTEM OVERVIEW</h2>
-      <div class="info-grid">
-        <div class="info-card">
-          <h3>Data Source</h3>
-          <p>Yahoo Finance</p>
-          <p class="info-detail">Free stock/ETF data</p>
-        </div>
-        <div class="info-card">
-          <h3>Strategy</h3>
-          <p>Statistical Arbitrage</p>
-          <p class="info-detail">Correlation-based trading</p>
-        </div>
-        <div class="info-card">
-          <h3>Sampling</h3>
-          <p>30s Interval</p>
-          <p class="info-detail">30m lookback window</p>
-        </div>
-      </div>
-    </div>
-
-    <div class="quick-links">
-      <RouterLink to="/signals" class="quick-link">
-        <span class="link-icon">🚨</span>
-        <span class="link-text">View Signals</span>
       </RouterLink>
-      <RouterLink to="/pairs" class="quick-link">
-        <span class="link-icon">📊</span>
-        <span class="link-text">Trading Pairs</span>
-      </RouterLink>
-      <RouterLink to="/trades" class="quick-link">
-        <span class="link-icon">📈</span>
-        <span class="link-text">Positions</span>
-      </RouterLink>
-      <RouterLink to="/settings" class="quick-link">
-        <span class="link-icon">⚙️</span>
-        <span class="link-text">Settings</span>
-      </RouterLink>
-    </div>
+    </transition-group>
   </div>
 </template>
 
 <style scoped>
 .home {
   max-width: 1200px;
-  padding: 10px 0;
+  padding: 0;
 }
 
+/* Welcome Banner */
 .welcome-banner {
-  background: #ffffff;
-  border: 1px solid #c4c4c4;
-  box-shadow: 2px 2px 4px rgba(0,0,0,0.04);
-  padding: 20px 24px;
-  margin-bottom: 16px;
+  background: linear-gradient(135deg, #ffffff 0%, #f8f8f5 100%);
+  border: 1px solid #d4d4d4;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.06);
+  padding: 32px 24px;
+  margin-bottom: 20px;
   text-align: center;
+  position: relative;
+  overflow: hidden;
+  border-radius: 8px;
+}
+
+.banner-decoration {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, #0056b3 0%, #1a7f37 50%, #c41e3a 100%);
+}
+
+.banner-line {
+  width: 60px;
+  height: 2px;
+  background: #1a1a1a;
+  margin: 16px auto 0;
+  border-radius: 1px;
 }
 
 .welcome-banner h1 {
-  font-size: 1.5em;
+  font-size: 1.8em;
   font-weight: 700;
   color: #1a1a1a;
-  letter-spacing: 3px;
+  letter-spacing: 4px;
   text-transform: uppercase;
-  margin-bottom: 8px;
+  margin-bottom: 10px;
   font-family: 'Times New Roman', Times, serif;
 }
 
 .subtitle {
-  font-size: 0.85em;
+  font-size: 0.95em;
   color: #5a5a5a;
   font-style: italic;
+  letter-spacing: 0.5px;
+}
+
+/* Animation: Fade Down */
+.fade-down-enter-active {
+  transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.fade-down-leave-active {
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.fade-down-enter-from {
+  opacity: 0;
+  transform: translateY(-20px);
+}
+
+.fade-down-leave-to {
+  opacity: 0;
+  transform: translateY(20px);
 }
 
 /* Status Grid */
 .status-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 12px;
-  margin-bottom: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+  margin-bottom: 20px;
 }
 
 .status-card {
-  background: #ffffff;
-  border: 1px solid #c4c4c4;
-  box-shadow: 2px 2px 4px rgba(0,0,0,0.04);
-  padding: 16px;
+  background: linear-gradient(135deg, #ffffff 0%, #fafafa 100%);
+  border: 1px solid #d4d4d4;
+  box-shadow: 0 3px 8px rgba(0,0,0,0.05);
+  padding: 20px;
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 16px;
+  position: relative;
+  overflow: hidden;
+  border-radius: 8px;
+  animation: card-enter 0.5s ease-out forwards;
+  animation-delay: var(--delay, 0s);
+  opacity: 0;
+}
+
+@keyframes card-enter {
+  from {
+    opacity: 0;
+    transform: translateY(15px) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.card-shine {
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.3) 50%, transparent 100%);
+  transition: left 0.6s ease;
+}
+
+.status-card:hover .card-shine {
+  left: 100%;
+}
+
+.status-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 16px rgba(0,0,0,0.08);
+  border-color: #b4b4b4;
 }
 
 .status-icon {
-  font-size: 2em;
+  font-size: 2.2em;
   line-height: 1;
+  transition: transform 0.3s ease;
+}
+
+.status-card:hover .status-icon {
+  transform: scale(1.1);
 }
 
 .status-info {
   display: flex;
   flex-direction: column;
+  gap: 4px;
 }
 
 .status-label {
   font-size: 0.7em;
   color: #5a5a5a;
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: 1px;
   font-weight: 600;
 }
 
 .status-value {
-  font-size: 1.2em;
+  font-size: 1.4em;
   font-weight: 700;
   color: #1a1a1a;
   font-family: 'Courier New', Courier, monospace;
@@ -176,35 +258,63 @@ onMounted(() => {
 
 .status-value.online {
   color: #1a7f37;
+  animation: glow-green 2s ease-in-out infinite;
+}
+
+@keyframes glow-green {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.8; }
 }
 
 /* Info Section */
 .info-section {
-  margin-bottom: 16px;
+  margin-bottom: 20px;
+}
+
+.fade-up-enter-active {
+  transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.fade-up-enter-from {
+  opacity: 0;
+  transform: translateY(20px);
 }
 
 .info-section h2 {
-  font-size: 0.9em;
+  font-size: 0.95em;
   font-weight: 700;
   color: #1a1a1a;
-  letter-spacing: 1.5px;
+  letter-spacing: 2px;
   text-transform: uppercase;
-  margin-bottom: 12px;
-  padding-left: 12px;
+  margin-bottom: 16px;
+  padding-left: 14px;
   border-left: 3px solid #c41e3a;
 }
 
 .info-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px;
 }
 
 .info-card {
-  background: #ffffff;
-  border: 1px solid #c4c4c4;
-  box-shadow: 2px 2px 4px rgba(0,0,0,0.04);
-  padding: 16px;
+  background: linear-gradient(135deg, #ffffff 0%, #f8f8f5 100%);
+  border: 1px solid #d4d4d4;
+  box-shadow: 0 3px 8px rgba(0,0,0,0.05);
+  padding: 20px;
+  border-radius: 8px;
+  transition: all 0.3s ease;
+  position: relative;
+}
+
+.info-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 16px rgba(0,0,0,0.08);
+}
+
+.info-icon {
+  font-size: 1.5em;
+  margin-bottom: 12px;
 }
 
 .info-card h3 {
@@ -212,15 +322,15 @@ onMounted(() => {
   font-weight: 700;
   color: #5a5a5a;
   text-transform: uppercase;
-  letter-spacing: 0.5px;
-  margin-bottom: 8px;
+  letter-spacing: 1px;
+  margin-bottom: 10px;
 }
 
 .info-card p {
-  font-size: 1em;
+  font-size: 1.05em;
   font-weight: 600;
   color: #1a1a1a;
-  margin-bottom: 4px;
+  margin-bottom: 6px;
 }
 
 .info-detail {
@@ -232,37 +342,95 @@ onMounted(() => {
 /* Quick Links */
 .quick-links {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px;
 }
 
 .quick-link {
   display: flex;
   align-items: center;
-  gap: 12px;
-  background: #ffffff;
-  border: 1px solid #c4c4c4;
-  box-shadow: 2px 2px 4px rgba(0,0,0,0.04);
-  padding: 16px;
+  gap: 16px;
+  background: linear-gradient(135deg, #ffffff 0%, #fafafa 100%);
+  border: 1px solid #d4d4d4;
+  box-shadow: 0 3px 8px rgba(0,0,0,0.05);
+  padding: 18px 20px;
   text-decoration: none;
   color: #1a1a1a;
-  transition: all 0.2s;
+  border-radius: 8px;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  position: relative;
+  overflow: hidden;
+  animation: link-enter 0.4s ease-out forwards;
+  animation-delay: var(--delay, 0s);
+  opacity: 0;
+}
+
+@keyframes link-enter {
+  from {
+    opacity: 0;
+    transform: translateX(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
 }
 
 .quick-link:hover {
-  box-shadow: 3px 3px 6px rgba(0,0,0,0.08);
-  border-color: #8b8b8b;
+  transform: translateY(-2px) translateX(4px);
+  box-shadow: 0 6px 20px rgba(0,0,0,0.1);
+  border-color: #0056b3;
+  background: linear-gradient(135deg, #f0f8ff 0%, #e8f4fc 100%);
+}
+
+.quick-link:hover .link-icon {
+  transform: scale(1.2);
+}
+
+.quick-link:hover .link-arrow {
+  transform: translateX(4px);
+  opacity: 1;
+}
+
+.link-icon-wrapper {
+  width: 40px;
+  height: 40px;
+  background: linear-gradient(135deg, #f0f0eb 0%, #e8e8e3 100%);
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.3s ease;
+}
+
+.quick-link:hover .link-icon-wrapper {
+  background: linear-gradient(135deg, #e3f2fd 0%, #d1ecf1 100%);
 }
 
 .link-icon {
-  font-size: 1.5em;
+  font-size: 1.4em;
   line-height: 1;
+  transition: transform 0.3s ease;
+}
+
+.link-content {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
 }
 
 .link-text {
   font-size: 0.85em;
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: 1px;
+}
+
+.link-arrow {
+  font-size: 1.1em;
+  color: #0056b3;
+  opacity: 0;
+  transition: all 0.3s ease;
 }
 </style>

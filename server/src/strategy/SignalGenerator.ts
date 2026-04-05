@@ -4,6 +4,7 @@ import EntryChecker from './EntryChecker';
 import { getDatabase } from '../database/connection';
 import config from '../config';
 import ReturnCalculator from '../core/data/ReturnCalculator';
+import { wsService } from '../api/websocket';
 
 export interface TradingSignal {
   id?: number;
@@ -156,6 +157,9 @@ export class SignalGenerator {
     // Save to database
     const savedId = this.saveSignal(signal);
     signal.id = savedId;
+
+    // Broadcast signal via WebSocket
+    wsService.broadcastSignal(signal);
 
     if (signal.triggered) {
       console.log(`🚨 TRADING SIGNAL: ${stockA}/${stockB} - Score: ${score.totalScore}`);

@@ -1,4 +1,5 @@
 import YahooFinanceClient, { YahooQuote } from './YahooFinanceClient';
+import TigerClient, { TigerQuote } from './TigerClient';
 import { getDatabase } from '../database/connection';
 import config from '../config';
 
@@ -26,18 +27,20 @@ export interface StockData {
   bid: number;
   ask: number;
   volume: number;
-  source: 'yahoo' | 'simulated';
+  source: 'yahoo' | 'tiger' | 'simulated';
 }
 
-export type DataSource = 'yahoo' | 'simulated';
+export type DataSource = 'yahoo' | 'tiger' | 'simulated';
 
 /**
  * Unified Data Fetcher
- * Supports multiple data sources: Yahoo Finance or Simulated
- * IG has been removed - use Yahoo Finance for stock/ETF data
+ * Supports multiple data sources: Yahoo Finance, Tiger API, or Simulated
+ * Yahoo Finance is free but has rate limits
+ * Tiger API requires purchased market data permissions
  */
 export class UnifiedDataFetcher {
   private yahooClient: YahooFinanceClient;
+  private tigerClient: TigerClient | null = null;
   private source: DataSource;
   private priceHistory: Map<string, StockData[]> = new Map();
   private lastCumulativeVolume: Map<string, { volume: number; dateKey: string }> = new Map();
@@ -56,6 +59,14 @@ export class UnifiedDataFetcher {
   constructor(source: DataSource = 'yahoo') {
     this.source = source;
     this.yahooClient = new YahooFinanceClient();
+
+    // Initialize Tiger client if configured
+    if (source === 'tiger') {
+      this.tigerClient = new TigerClient();
+      console.log('📊 Tiger API client initialized (requires market data permissions)');
+      console.log('📊 Batch quotes: up to 50 symbols per request, 120 requests/min');
+    }
+
     this.lookbackPoints = Math.max(
       2,
       Math.floor((config.trading.lookbackWindow * 60) / config.trading.samplingInterval)
@@ -69,7 +80,7 @@ export class UnifiedDataFetcher {
    */
   async initialize(): Promise<void> {
     // Yahoo Finance doesn't require authentication
-    // IG data source has been removed
+    // Tiger API credentials are validated in TigerClient constructor
   }
 
   /**
@@ -113,19 +124,60 @@ export class UnifiedDataFetcher {
 
     // Fetch initial historical data
     console.log(`📈 Fetching historical data for ${this.activeSymbols.size} unique symbols...`);
-    for (const symbol of this.activeSymbols) {
-      await this.fetchHistoricalData(symbol);
+
+    if (this.source === 'tiger') {
+      // Tiger: batch historical data with rate limit consideration
+      // get_stock_briefs is high-frequency (120/min), but get_bars/get_timeline are low-frequency
+      for (const symbol of this.activeSymbols) {
+        await this.fetchHistoricalData(symbol);
+        // Small delay for low-frequency historical APIs
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
+    } else {
+      for (const symbol of this.activeSymbols) {
+        await this.fetchHistoricalData(symbol);
+      }
     }
 
     // Start polling
     const intervalMs = config.trading.samplingInterval * 1000;
     this.intervalId = setInterval(async () => {
-      for (const symbol of this.activeSymbols) {
-        await this.fetchCurrentPrice(symbol);
+      if (this.source === 'tiger') {
+        // Tiger: use batch fetching to minimize API calls (rate limit: 10/min)
+        await this.fetchAllCurrentPrices();
+      } else {
+        // Yahoo/Simulated: individual fetching (no strict limits)
+        for (const symbol of this.activeSymbols) {
+          await this.fetchCurrentPrice(symbol);
+        }
       }
     }, intervalMs);
 
     console.log(`🔄 Started polling every ${config.trading.samplingInterval}s`);
+  }
+
+  /**
+   * Fetch all current prices - optimized for Tiger batch API
+   */
+  private async fetchAllCurrentPrices(): Promise<void> {
+    try {
+      const results = await this.fetchAllFromTiger();
+
+      for (const [symbol, data] of results) {
+        this.updateHistory(symbol, data);
+        this.saveToDatabase(data);
+      }
+
+      // Log any symbols that weren't fetched
+      const fetchedSymbols = new Set(results.keys());
+      for (const symbol of this.activeSymbols) {
+        if (!fetchedSymbols.has(symbol)) {
+          console.warn(`⚠️ No data received for ${symbol}`);
+        }
+      }
+    } catch (error) {
+      console.error('Failed to fetch batch prices from Tiger:', error);
+    }
   }
 
   /**
@@ -148,6 +200,9 @@ export class UnifiedDataFetcher {
       let data: StockData;
 
       switch (this.source) {
+        case 'tiger':
+          data = await this.fetchFromTiger(symbol);
+          break;
         case 'yahoo':
           data = await this.fetchFromYahoo(symbol);
           break;
@@ -204,6 +259,84 @@ export class UnifiedDataFetcher {
       volume: normalizedVolume,
       source: 'yahoo',
     };
+  }
+
+  /**
+   * Fetch from Tiger API
+   * Note: Tiger has strict rate limits (10 req/min for low-freq APIs)
+   * Uses batching (max 50 symbols per request) to minimize API calls
+   */
+  private async fetchFromTiger(symbol: string): Promise<StockData> {
+    if (!this.tigerClient) {
+      throw new Error('Tiger client not initialized');
+    }
+
+    const quote = await this.tigerClient.getQuote(symbol);
+    const history = this.priceHistory.get(symbol) || [];
+    const dateKey = quote.timestamp.toISOString().slice(0, 10);
+    const lastVolumeState = this.lastCumulativeVolume.get(symbol);
+
+    let normalizedVolume = quote.volume;
+
+    // Tiger API provides per-interval volume, no need for normalization
+    // But we still check for valid volume
+    if (!Number.isFinite(normalizedVolume) || normalizedVolume < 0) {
+      if (history.length > 0) {
+        const recentVolumes = history
+          .slice(-Math.min(this.lookbackPoints, history.length))
+          .map(item => item.volume)
+          .filter(volume => Number.isFinite(volume) && volume >= 0);
+
+        if (recentVolumes.length > 0) {
+          normalizedVolume = recentVolumes.reduce((sum, volume) => sum + volume, 0) / recentVolumes.length;
+        }
+      }
+    }
+
+    return {
+      symbol,
+      timestamp: quote.timestamp,
+      price: quote.price,
+      bid: quote.bid,
+      ask: quote.ask,
+      volume: normalizedVolume,
+      source: 'tiger',
+    };
+  }
+
+  /**
+   * Fetch all current prices from Tiger in batch
+   * More efficient than individual requests due to rate limits
+   */
+  async fetchAllFromTiger(): Promise<Map<string, StockData>> {
+    if (!this.tigerClient || this.activeSymbols.size === 0) {
+      return new Map();
+    }
+
+    const symbols = Array.from(this.activeSymbols);
+    const results = new Map<string, StockData>();
+
+    try {
+      // Tiger supports up to 50 symbols per batch
+      const quotes = await this.tigerClient.getQuotes(symbols);
+
+      for (const quote of quotes) {
+        const data: StockData = {
+          symbol: quote.symbol,
+          timestamp: quote.timestamp,
+          price: quote.price,
+          bid: quote.bid,
+          ask: quote.ask,
+          volume: quote.volume,
+          source: 'tiger',
+        };
+        results.set(quote.symbol, data);
+      }
+    } catch (error) {
+      console.error('Failed to fetch batch quotes from Tiger:', error);
+    }
+
+    return results;
   }
 
   /**
@@ -312,7 +445,33 @@ export class UnifiedDataFetcher {
    */
   private async fetchHistoricalData(symbol: string): Promise<void> {
     try {
-      if (this.source === 'yahoo') {
+      if (this.source === 'tiger' && this.tigerClient) {
+        // Tiger API: use timeline for intraday 1-minute data
+        const historical = await this.tigerClient.getHistoricalData(symbol, '1d', '1m');
+
+        // Filter out invalid data (zero or null prices)
+        const validHistorical = historical.filter(h => h.close > 0 && Number.isFinite(h.close));
+
+        const stockData: StockData[] = validHistorical.map((h) => ({
+          symbol,
+          timestamp: h.date,
+          price: h.close,
+          bid: h.low,
+          ask: h.high,
+          volume: this.toFinite(h.volume),
+          source: 'tiger',
+        }));
+
+        // Keep only enough points required by strategy window (+1 for return calculation)
+        this.priceHistory.set(symbol, stockData.slice(-(this.lookbackPoints + 1)));
+
+        // Save to database
+        for (const data of stockData.slice(-(this.lookbackPoints + 1))) {
+          this.saveToDatabase(data);
+        }
+
+        console.log(`📊 Loaded ${Math.min(stockData.length, this.lookbackPoints + 1)} historical prices for ${symbol} (Tiger)`);
+      } else if (this.source === 'yahoo') {
         const historical = await this.yahooClient.getHistoricalData(symbol, '1d', '1m');
 
         // Filter out invalid data (zero or null prices)

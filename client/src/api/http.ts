@@ -1,4 +1,23 @@
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+/**
+ * 自动检测API基础URL
+ * 本地开发环境 (localhost:5173) → localhost:3001
+ * 其他环境 → 使用 VITE_API_URL 环境变量
+ */
+function getApiBase(): string {
+  const envUrl = (import.meta.env.VITE_API_URL as string | undefined)?.trim();
+
+  // 检测是否在本地开发环境 (Vite dev server on port 5173)
+  if (typeof window !== 'undefined') {
+    const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+    const isViteDev = window.location.port === '5173';
+    if (isLocalhost && isViteDev) {
+      return 'http://localhost:3001';
+    }
+  }
+
+  // 生产/其他环境使用环境变量配置
+  return envUrl ? envUrl.replace(/\/$/, '') : '';
+}
 
 export interface Pair {
   id: number;
@@ -63,14 +82,12 @@ export interface Trade {
 }
 
 class ApiClient {
-  private baseUrl: string;
-
-  constructor() {
-    this.baseUrl = API_BASE;
+  private getBaseUrl(): string {
+    return getApiBase();
   }
 
   private async fetch<T>(path: string, options?: RequestInit): Promise<T> {
-    const response = await fetch(`${this.baseUrl}${path}`, {
+    const response = await fetch(`${this.getBaseUrl()}${path}`, {
       ...options,
       headers: {
         'Content-Type': 'application/json',

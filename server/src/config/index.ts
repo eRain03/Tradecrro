@@ -5,7 +5,12 @@ dotenv.config({ path: path.resolve(__dirname, '../../.env') });
 
 interface Config {
   dataSource: {
-    provider: 'yahoo' | 'simulated';
+    provider: 'yahoo' | 'tiger' | 'simulated';
+  };
+  /** Tiger Open API: 实时行情数据源（需购买行情权限） */
+  tiger: {
+    configPath: string;
+    python: string;
   };
   /** Databento: 仅用于回测历史 K 线（通过 Python 官方客户端拉取） */
   databento: {
@@ -34,7 +39,11 @@ interface Config {
 
 export const config: Config = {
   dataSource: {
-    provider: (process.env.DATA_SOURCE as 'yahoo' | 'simulated') || 'yahoo',
+    provider: (process.env.DATA_SOURCE as 'yahoo' | 'tiger' | 'simulated') || 'yahoo',
+  },
+  tiger: {
+    configPath: (process.env.TIGER_CONFIG_PATH || '').trim(),
+    python: process.env.TIGER_PYTHON || 'python3',
   },
   databento: {
     apiKey: (process.env.DATABENTO_API_KEY || '').trim(),

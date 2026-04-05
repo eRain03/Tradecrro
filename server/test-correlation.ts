@@ -9,11 +9,11 @@
  * 5. 滞后正相关 -> 测试 lead-lag 检测
  */
 
-import SyncCorrelation from './src/core/correlation/SyncCorrelation';
-import LagCorrelation from './src/core/correlation/LagCorrelation';
-import { ScoringEngine } from './src/core/scoring/ScoringEngine';
-import ReturnCalculator from './src/core/data/ReturnCalculator';
-import VolumeAnalyzer from './src/core/data/VolumeAnalyzer';
+import SyncCorrelation from '@/core/correlation/SyncCorrelation';
+import LagCorrelation from '@/core/correlation/LagCorrelation';
+import { ScoringEngine } from '@/core/scoring/ScoringEngine';
+import ReturnCalculator from '@/core/data/ReturnCalculator';
+import VolumeAnalyzer from '@/core/data/VolumeAnalyzer';
 
 console.log('=== 相关性分数计算验证 ===\n');
 

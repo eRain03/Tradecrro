@@ -1,7 +1,9 @@
 import axios from 'axios';
 import { getDatabase } from '../../database/connection';
 import { YahooFinanceClient } from '../../data/YahooFinanceClient';
+import TigerClient from '../../data/TigerClient';
 import UnifiedDataFetcher from '../../data/UnifiedDataFetcher';
+import config from '../../config';
 
 const POOL_OF_TICKERS = [
   // Tech & Software
@@ -50,10 +52,27 @@ export class AIPairMiner {
   private isRunning = false;
   private timer: NodeJS.Timeout | null = null;
   private yahooClient = new YahooFinanceClient();
+  private tigerClient: TigerClient | null = null;
   private dataFetcher: UnifiedDataFetcher;
-  
+  private readonly MAX_PAIRS = 400;
+
   constructor(dataFetcher: UnifiedDataFetcher) {
     this.dataFetcher = dataFetcher;
+
+    // Initialize Tiger client if configured
+    if (config.dataSource.provider === 'tiger') {
+      this.tigerClient = new TigerClient();
+    }
+  }
+
+  /**
+   * Get quote using the configured data source
+   */
+  private async getQuote(symbol: string) {
+    if (this.tigerClient) {
+      return this.tigerClient.getQuote(symbol);
+    }
+    return this.yahooClient.getQuote(symbol);
   }
 
   // API settings
@@ -65,7 +84,7 @@ export class AIPairMiner {
     if (this.isRunning) return;
     this.isRunning = true;
     console.log('[AIPairMiner] 启动后台 AI 交易对挖掘引擎...');
-    
+
     // Initial run after 5 seconds
     this.timer = setTimeout(() => {
       this.runMinerCycle();
@@ -81,12 +100,98 @@ export class AIPairMiner {
     console.log('[AIPairMiner] 停止 AI 交易对挖掘引擎.');
   }
 
+  /**
+   * Trim pairs to MAX_PAIRS by deleting oldest pairs (lowest id)
+   */
+  public trimPairsToLimit(): number {
+    const db = getDatabase();
+    const countRow = db.prepare('SELECT COUNT(*) as count FROM stock_pairs WHERE is_active = 1').get() as { count: number };
+    const currentCount = countRow.count;
+
+    if (currentCount <= this.MAX_PAIRS) {
+      console.log(`[AIPairMiner] 当前交易对数量 ${currentCount}，未超过上限 ${this.MAX_PAIRS}`);
+      return 0;
+    }
+
+    const toDelete = currentCount - this.MAX_PAIRS;
+    console.log(`[AIPairMiner] 交易对数量 ${currentCount} 超过上限 ${this.MAX_PAIRS}，删除 ${toDelete} 个最旧的交易对...`);
+
+    // Get IDs to delete
+    const idsToDelete = db.prepare(`
+      SELECT id FROM stock_pairs WHERE is_active = 1 ORDER BY id ASC LIMIT ?
+    `).all(toDelete) as Array<{ id: number }>;
+
+    const idList = idsToDelete.map(r => r.id);
+    const placeholders = idList.map(() => '?').join(',');
+
+    // Delete related signals first (foreign key constraint)
+    db.prepare(`DELETE FROM signals WHERE pair_id IN (${placeholders})`).run(...idList);
+
+    // Delete the pairs
+    const result = db.prepare(`DELETE FROM stock_pairs WHERE id IN (${placeholders})`).run(...idList);
+
+    console.log(`[AIPairMiner] 已删除 ${result.changes} 个交易对`);
+    return result.changes;
+  }
+
+  /**
+   * Clean up pairs with low liquidity (daily traded value < $10M)
+   */
+  public async cleanupLowLiquidityPairs(): Promise<number> {
+    const db = getDatabase();
+    const pairs = db.prepare(`
+      SELECT id, stock_a, stock_b FROM stock_pairs WHERE is_active = 1
+    `).all() as Array<{ id: number; stock_a: string; stock_b: string }>;
+
+    console.log(`[AIPairMiner] 检查 ${pairs.length} 个活跃交易对的流动性...`);
+    let deactivatedCount = 0;
+    const MIN_VALUE = 10_000_000;
+
+    for (const pair of pairs) {
+      try {
+        const quoteA = await this.getQuote(pair.stock_a);
+        const quoteB = await this.getQuote(pair.stock_b);
+        const valueA = quoteA.price * quoteA.volume;
+        const valueB = quoteB.price * quoteB.volume;
+
+        if (valueA < MIN_VALUE || valueB < MIN_VALUE) {
+          db.prepare(`UPDATE stock_pairs SET is_active = 0 WHERE id = ?`).run(pair.id);
+          deactivatedCount++;
+          console.log(
+            `[AIPairMiner] 停用低流动性交易对 ${pair.stock_a}/${pair.stock_b}: ` +
+            `$${(valueA/1000000).toFixed(1)}M / $${(valueB/1000000).toFixed(1)}M`
+          );
+        }
+
+        // Rate limiting
+        await new Promise(resolve => setTimeout(resolve, 100));
+      } catch (err: any) {
+        // If we can't get quotes, deactivate the pair
+        db.prepare(`UPDATE stock_pairs SET is_active = 0 WHERE id = ?`).run(pair.id);
+        deactivatedCount++;
+        console.log(`[AIPairMiner] 停用无法验证的交易对 ${pair.stock_a}/${pair.stock_b}: ${err.message}`);
+      }
+    }
+
+    console.log(`[AIPairMiner] 清理完成，停用了 ${deactivatedCount} 个低流动性交易对`);
+    return deactivatedCount;
+  }
+
   private async runMinerCycle() {
     if (!this.isRunning) return;
 
     try {
+      // Check if we've reached the max pairs limit
+      const db = getDatabase();
+      const countRow = db.prepare('SELECT COUNT(*) as count FROM stock_pairs WHERE is_active = 1').get() as { count: number };
+      if (countRow.count >= this.MAX_PAIRS) {
+        console.log(`[AIPairMiner] 已达到交易对上限 (${countRow.count}/${this.MAX_PAIRS})，跳过本轮挖掘`);
+        return;
+      }
+
       console.log('[AIPairMiner] 开始新一轮挖掘...');
-      
+      console.log(`[AIPairMiner] 当前交易对数量: ${countRow.count}/${this.MAX_PAIRS}`);
+
       // 1. Pick a random batch of 100 symbols
       const batch = this.getRandomBatch(POOL_OF_TICKERS, 100);
       console.log(`[AIPairMiner] 选中用于挖掘的股票池 (${batch.length} 只)`);
@@ -199,19 +304,20 @@ export class AIPairMiner {
 
   private async verifyLiquidity(stockA: string, stockB: string): Promise<boolean> {
     try {
-      const quoteA = await this.yahooClient.getQuote(stockA);
-      const quoteB = await this.yahooClient.getQuote(stockB);
+      const quoteA = await this.getQuote(stockA);
+      const quoteB = await this.getQuote(stockB);
 
-      // Check daily traded value (Price * Volume). Expecting > $5,000,000
+      // Check daily traded value (Price * Volume). Minimum $10,000,000
       const valueA = quoteA.price * quoteA.volume;
       const valueB = quoteB.price * quoteB.volume;
+      const MIN_VALUE = 10_000_000;
 
-      if (valueA < 5_000_000) {
-        console.log(`[AIPairMiner] 剔除对子 ${stockA}/${stockB}: ${stockA} 流动性不足 ($${(valueA/1000000).toFixed(1)}M)`);
+      if (valueA < MIN_VALUE) {
+        console.log(`[AIPairMiner] 剔除对子 ${stockA}/${stockB}: ${stockA} 流动性不足 ($${(valueA/1000000).toFixed(1)}M < $10M)`);
         return false;
       }
-      if (valueB < 5_000_000) {
-        console.log(`[AIPairMiner] 剔除对子 ${stockA}/${stockB}: ${stockB} 流动性不足 ($${(valueB/1000000).toFixed(1)}M)`);
+      if (valueB < MIN_VALUE) {
+        console.log(`[AIPairMiner] 剔除对子 ${stockA}/${stockB}: ${stockB} 流动性不足 ($${(valueB/1000000).toFixed(1)}M < $10M)`);
         return false;
       }
 
