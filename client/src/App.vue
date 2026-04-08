@@ -69,6 +69,10 @@ onUnmounted(() => {
           <span class="nav-icon">📈</span>
           <span class="nav-text" v-show="!collapsed">Positions</span>
         </RouterLink>
+        <RouterLink to="/auto-trading" class="nav-item" v-slot="{ isActive }">
+          <span class="nav-icon">🤖</span>
+          <span class="nav-text" v-show="!collapsed">Auto Trade</span>
+        </RouterLink>
         <RouterLink to="/backtest" class="nav-item" v-slot="{ isActive }">
           <span class="nav-icon">🔬</span>
           <span class="nav-text" v-show="!collapsed">Backtest</span>
@@ -86,7 +90,7 @@ onUnmounted(() => {
       <div class="sidebar-footer">
         <div class="connection-status">
           <span class="status-dot connected"></span>
-          <span class="status-text" v-show="!collapsed">IG LIVE</span>
+          <span class="status-text" v-show="!collapsed">TIGER API</span>
         </div>
         <button class="collapse-btn" @click="collapsed = !collapsed">
           {{ collapsed ? '→' : '←' }}
@@ -104,8 +108,8 @@ onUnmounted(() => {
           <span class="market-time">{{ marketTime }}</span>
         </div>
         <div class="account-info">
-          <span class="account-id">Z69RME</span>
-          <span class="account-type">LIVE</span>
+          <span class="account-id">TIGER</span>
+          <span class="account-type">API</span>
         </div>
       </header>
 

@@ -1,19 +1,32 @@
 import { Router } from 'express';
 import TigerAutoTrader, { AutoTradeConfig } from '../../trading/TigerAutoTrader';
+import TigerTradeClient from '../../trading/TigerTradeClient';
+import config from '../../config';
 
 const router = Router();
 
-// Singleton instance
+// Singleton instances
 let autoTrader: TigerAutoTrader | null = null;
+let tradeClient: TigerTradeClient | null = null;
 
 /**
  * Get or create auto trader instance
  */
-export function getAutoTrader(config?: Partial<AutoTradeConfig>): TigerAutoTrader {
+export function getAutoTrader(configOverride?: Partial<AutoTradeConfig>): TigerAutoTrader {
   if (!autoTrader) {
-    autoTrader = new TigerAutoTrader(config);
+    autoTrader = new TigerAutoTrader(configOverride);
   }
   return autoTrader;
+}
+
+/**
+ * Get or create trade client instance
+ */
+function getTradeClient(): TigerTradeClient {
+  if (!tradeClient) {
+    tradeClient = new TigerTradeClient();
+  }
+  return tradeClient;
 }
 
 /**
@@ -38,6 +51,62 @@ router.get('/status', (req, res) => {
     });
   } catch (error) {
     res.status(500).json({ error: 'Failed to get auto trading status' });
+  }
+});
+
+/**
+ * Get current positions from Tiger
+ */
+router.get('/positions', async (req, res) => {
+  try {
+    const client = getTradeClient();
+    const positions = await client.getPositions();
+    res.json(positions);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * Get open orders from Tiger
+ */
+router.get('/orders', async (req, res) => {
+  try {
+    const client = getTradeClient();
+    const orders = await client.getOpenOrders();
+    res.json(orders);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * Test order - validates Tiger API connection without placing real order
+ */
+router.post('/test-order', async (req, res) => {
+  try {
+    const client = getTradeClient();
+
+    // Get account info to test connection
+    const accountInfo = await client.getAccountInfo();
+
+    if (accountInfo.ok) {
+      res.json({
+        success: true,
+        message: `Tiger API 连接正常 - 账户: ${accountInfo.accountId}, 可用资金: $${accountInfo.buyingPower?.toFixed(2) || 'N/A'}`,
+        account: accountInfo,
+      });
+    } else {
+      res.json({
+        success: false,
+        error: accountInfo.error || '无法获取账户信息',
+      });
+    }
+  } catch (error: any) {
+    res.json({
+      success: false,
+      error: error.message,
+    });
   }
 });
 

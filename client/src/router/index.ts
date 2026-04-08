@@ -30,6 +30,11 @@ const router = createRouter({
       component: () => import('../views/TradesView.vue'),
     },
     {
+      path: '/auto-trading',
+      name: 'auto-trading',
+      component: () => import('../views/AutoTradingView.vue'),
+    },
+    {
       path: '/backtest',
       name: 'backtest',
       component: () => import('../views/BacktestView.vue'),
