@@ -98,8 +98,9 @@ export const useTradingStore = defineStore('trading', () => {
 
   function addSignal(signal: Signal) {
     signals.value = dedupeSignals([signal, ...signals.value]);
-    if (signals.value.length > 100) {
-      signals.value = signals.value.slice(0, 100);
+    // Keep more signals to match all pairs (default 500)
+    if (signals.value.length > 500) {
+      signals.value = signals.value.slice(0, 500);
     }
   }
 

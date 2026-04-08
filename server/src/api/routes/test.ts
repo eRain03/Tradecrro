@@ -16,7 +16,7 @@ interface TestPairRequest {
   date: string; // YYYY-MM-DD format
   samplingInterval?: number; // seconds, default 30
   lookbackWindow?: number; // minutes, default 30
-  lagIntervals?: number; // number of intervals, default 10
+  lagIntervals?: number; // number of intervals, default 2 (1 minute)
 }
 
 interface PricePoint {
@@ -70,7 +70,7 @@ router.post('/pair', async (req, res) => {
   // Parameters with defaults
   const samplingSec = samplingInterval || 30;
   const lookbackMin = lookbackWindow || 30;
-  const maxLag = lagIntervals || 10;
+  const maxLag = lagIntervals || 2;
 
   // Validate input
   if (!stockA || !stockB || !date) {

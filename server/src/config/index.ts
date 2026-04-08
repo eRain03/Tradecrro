@@ -34,6 +34,13 @@ interface Config {
     samplingInterval: number;
     lookbackWindow: number;
     lagIntervals: number;
+    maxPairs: number;
+  };
+  autoTrading: {
+    enabled: boolean;
+    dryRun: boolean;
+    maxPositionSize: number;
+    maxPositionValue: number;
   };
 }
 
@@ -65,7 +72,14 @@ export const config: Config = {
     stopLossPct: parseInt(process.env.STOP_LOSS_PCT || '50', 10),
     samplingInterval: parseInt(process.env.SAMPLING_INTERVAL || '30', 10),
     lookbackWindow: parseInt(process.env.LOOKBACK_WINDOW || '30', 10),
-    lagIntervals: parseInt(process.env.LAG_INTERVALS || '10', 10),
+    lagIntervals: parseInt(process.env.LAG_INTERVALS || '2', 10),
+    maxPairs: parseInt(process.env.MAX_PAIRS || '400', 10),
+  },
+  autoTrading: {
+    enabled: process.env.AUTO_TRADING_ENABLED === 'true',
+    dryRun: process.env.AUTO_TRADING_DRY_RUN !== 'false', // Default true for safety
+    maxPositionSize: parseInt(process.env.MAX_POSITION_SIZE || '100', 10),
+    maxPositionValue: parseInt(process.env.MAX_POSITION_VALUE || '10000', 10),
   },
 };
 

@@ -12,9 +12,16 @@ DANGER KEYWORDS (will trigger immediate exit):
 - "rate limit"
 - "code=4" (Tiger's rate limit code)
 
-Rate Limits:
-- High-frequency APIs (quotes): 120 requests/minute
-- Low-frequency APIs: 10 requests/minute
+Rate Limits (per Tiger Open API documentation):
+- High-frequency APIs (quotes, timeline): 120 requests/minute
+- Medium-frequency APIs (bars, depth): 60 requests/minute
+- Low-frequency APIs (grab_quote_permission): 10 requests/minute
+
+⚠️ IMPORTANT - QuoteClient Singleton Pattern:
+- We use is_grab_permission=False when creating QuoteClient
+- This avoids calling grab_quote_permission (low-frequency, 10/min)
+- Instead, we directly use high-frequency APIs like get_stock_briefs (120/min)
+- QuoteClient is cached as singleton to avoid repeated initialization
 
 Configuration:
 - Uses config file at server/config/tiger_openapi_config.properties
@@ -97,8 +104,17 @@ def _to_int(value: Any, fallback: int = 0) -> int:
         return fallback
 
 
+# Global singleton client - defined before _get_client to ensure proper initialization
+_quote_client = None
+
+
 def _get_client():
-    """Initialize Tiger QuoteClient."""
+    """Initialize Tiger QuoteClient (singleton pattern)."""
+    global _quote_client
+
+    if _quote_client is not None:
+        return _quote_client
+
     try:
         from tigeropen.quote.quote_client import QuoteClient
         from tigeropen.tiger_open_client import TigerOpenClientConfig
@@ -126,7 +142,12 @@ def _get_client():
         else:
             _fail(f"Tiger config file not found. Set TIGER_CONFIG_PATH or place config at: {default_paths[0]}")
 
-    return QuoteClient(client_config)
+    # ⚠️ CRITICAL: is_grab_permission=False to avoid calling grab_quote_permission
+    # grab_quote_permission is a LOW-FREQUENCY API (only 10 calls/minute)
+    # By setting is_grab_permission=False, we skip the automatic permission grab
+    # and rely on the high-frequency APIs like get_stock_briefs (120 calls/minute)
+    _quote_client = QuoteClient(client_config, is_grab_permission=False)
+    return _quote_client
 
 
 def _format_timestamp(ts: Any) -> str:

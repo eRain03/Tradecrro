@@ -4,7 +4,7 @@ import config from '../../config';
 /**
  * Lagged Correlation (Positive Correlation Detection)
  * Used for detecting lead-lag relationships
- * Default lag: 10 intervals = 5 minutes @ 30s interval
+ * Default lag: 2 intervals = 1 minute @ 30s interval
  */
 export class LagCorrelation {
   private static readonly DEFAULT_LAG = config.trading.lagIntervals;

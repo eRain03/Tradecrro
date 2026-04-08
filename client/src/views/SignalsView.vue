@@ -4,6 +4,9 @@ import { useTradingStore } from '../stores/trading';
 
 const store = useTradingStore();
 
+// Signal limit for fetching
+const signalLimit = ref(500);
+
 // Market status
 const marketOpen = ref(false);
 const marketTime = ref('');
@@ -48,7 +51,7 @@ const updateMarketStatus = () => {
 let timeInterval: ReturnType<typeof setInterval>;
 
 onMounted(() => {
-  store.fetchSignals();
+  store.fetchSignals(signalLimit.value);
   updateMarketStatus();
   timeInterval = setInterval(updateMarketStatus, 1000);
 });
@@ -178,7 +181,7 @@ const getEntryLogicText = (signal: any) => {
       <div class="header-actions">
         <div class="signal-stats">
           <span class="stat-badge">
-            <span class="stat-label">TOTAL</span>
+            <span class="stat-label">PAIRS</span>
             <span class="stat-value">{{ store.signals.length }}</span>
           </span>
           <span class="stat-badge triggered">
@@ -196,9 +199,15 @@ const getEntryLogicText = (signal: any) => {
           @click="showTriggeredOnly = !showTriggeredOnly"
         >
           <span class="filter-icon">{{ showTriggeredOnly ? '✓' : '○' }}</span>
-          <span class="filter-text">SHOW TRIGGERED ONLY</span>
+          <span class="filter-text">TRIGGERED ONLY</span>
         </button>
       </div>
+    </div>
+
+    <div class="scan-info" v-if="store.signals.length > 0">
+      <span class="scan-label">Latest Scan:</span>
+      <span class="scan-time">{{ formatTime(store.signals[0]?.timestamp) }}</span>
+      <span class="scan-note">• Showing latest signal for each trading pair</span>
     </div>
 
     <div v-if="store.isLoading" class="loading-state">
@@ -574,6 +583,37 @@ export default {
 .filter-icon {
   font-size: 1.2em;
   line-height: 1;
+}
+
+/* Scan Info */
+.scan-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 8px 14px;
+  background: #f8f9fa;
+  border: 1px solid #e9ecef;
+  border-radius: 4px;
+  font-size: 0.8em;
+}
+
+.scan-label {
+  color: #5a5a5a;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.scan-time {
+  color: #1a1a1a;
+  font-weight: 700;
+  font-family: 'Courier New', Courier, monospace;
+}
+
+.scan-note {
+  color: #8b8b8b;
+  font-style: italic;
 }
 
 /* Table */

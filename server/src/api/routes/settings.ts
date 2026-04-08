@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { getDatabase } from '../../database/connection';
+import { AIPairMiner } from '../../core/ai/AIPairMiner';
 
 const router = Router();
 
@@ -12,6 +13,11 @@ router.get('/', (req, res) => {
     rows.forEach((row) => {
       settings[row.key] = row.value;
     });
+
+    // Add current pair count
+    const pairCount = db.prepare('SELECT COUNT(*) as count FROM stock_pairs WHERE is_active = 1').get() as { count: number };
+    settings['current_pair_count'] = String(pairCount.count);
+
     res.json(settings);
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch settings' });
@@ -27,6 +33,15 @@ router.post('/', (req, res) => {
       INSERT OR REPLACE INTO settings (key, value, updated_at)
       VALUES (?, ?, CURRENT_TIMESTAMP)
     `).run(key, value);
+
+    // If updating max_pairs, also update the miner instance
+    if (key === 'max_pairs') {
+      const miner = (global as any).__aiPairMiner as AIPairMiner | undefined;
+      if (miner) {
+        miner.setMaxPairs(parseInt(value, 10));
+      }
+    }
+
     res.json({ success: true, key, value });
   } catch (error) {
     res.status(500).json({ error: 'Failed to update setting' });

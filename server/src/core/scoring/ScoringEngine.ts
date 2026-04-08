@@ -45,7 +45,7 @@ export class ScoringEngine {
     avgVolumeA: number,
     currentVolumeB: number,
     avgVolumeB: number,
-    maxLag: number = 10 // Default lag intervals
+    maxLag: number = 2 // Default lag intervals (1 minute)
   ): PairScore {
     console.log(`[ScoringEngine] THRESHOLD=${this.THRESHOLD}`);
     // Debug: log returns data

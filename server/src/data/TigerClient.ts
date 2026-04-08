@@ -2,6 +2,7 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import path from 'path';
 import config from '../config';
+import rateLimitMonitor from '../core/monitoring/RateLimitMonitor';
 
 const execFileAsync = promisify(execFile);
 
@@ -33,35 +34,73 @@ export interface HistoricalData {
 const DANGER_KEYWORDS = [
   'blacklist',
   'black list',
-  'permission denied',
-  'rate limit',
-  'code=4',
-  'current limiting',
+  // NOTE: 'code=4', 'rate limit error', 'current limiting interface' are TEMPORARY
+  // rate limits, NOT blacklist threats. They should trigger pause, not permanent disable.
 ];
 
+// Rate limit patterns - these are TEMPORARY, not blacklist threats
+// When detected, we should pause and retry, not permanently disable the client
+const RATE_LIMIT_PATTERNS = [
+  'code=4',
+  'rate limit error',
+  'current limiting interface',
+  'request limit',
+  'too many requests',
+  'frequency limit',
+];
+
+// Permission denied patterns that are NOT blacklist threats:
+// 1. Symbol permission - historical data only available for subscribed symbols (e.g., Nasdaq)
+// 2. Market permission - only subscribed markets have data access
+// These should be handled at pair selection level, not trigger blacklist protection
+const SYMBOL_PERMISSION_DENIED_PATTERN = /permission denied.*symbols of historical market data|permission denied.*occupied symbols/i;
+
 /**
- * Check if error message indicates blacklist threat
- * CRITICAL: This function MUST be called before any error is thrown
+ * Check if error message indicates blacklist threat (permanent danger)
+ * Returns: 'blacklist' | 'rate_limit' | null
  */
-function checkBlacklistThreat(errorMsg: string): void {
+function checkErrorType(errorMsg: string): 'blacklist' | 'rate_limit' | null {
+  // First check if this is a symbol-specific permission issue (not blacklist)
+  if (SYMBOL_PERMISSION_DENIED_PATTERN.test(errorMsg)) {
+    // This is just "symbol not in your historical data list" - not a threat
+    console.warn(`⚠️ Symbol not in historical data permission list: ${errorMsg.slice(0, 100)}...`);
+    return null;
+  }
+
   const errorLower = errorMsg.toLowerCase();
 
+  // Check for blacklist threats (permanent danger)
   for (const keyword of DANGER_KEYWORDS) {
     if (errorLower.includes(keyword.toLowerCase())) {
-      console.error('');
-      console.error('='.repeat(70));
-      console.error('🚫🚫🚫 BLACKLIST THREAT DETECTED 🚫🚫🚫');
-      console.error('='.repeat(70));
-      console.error(`Error: ${errorMsg}`);
-      console.error('ALL TIGER API CALLS STOPPED TO PROTECT YOUR ACCOUNT!');
-      console.error('DO NOT MAKE ANY MORE API CALLS!');
-      console.error('='.repeat(70));
-      console.error('');
-
-      // Hard throw - this will stop all operations
-      throw new Error(`BLACKLIST_THREAT: ${errorMsg}`);
+      return 'blacklist';
     }
   }
+
+  // Check for rate limit errors (temporary, should pause and retry)
+  for (const pattern of RATE_LIMIT_PATTERNS) {
+    if (errorLower.includes(pattern.toLowerCase())) {
+      return 'rate_limit';
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Log blacklist threat and throw error (stops all operations permanently)
+ */
+function logBlacklistThreat(errorMsg: string): void {
+  console.error('');
+  console.error('='.repeat(70));
+  console.error('🚫🚫🚫 BLACKLIST THREAT DETECTED 🚫🚫🚫');
+  console.error('='.repeat(70));
+  console.error(`Error: ${errorMsg}`);
+  console.error('ALL TIGER API CALLS STOPPED TO PROTECT YOUR ACCOUNT!');
+  console.error('DO NOT MAKE ANY MORE API CALLS!');
+  console.error('='.repeat(70));
+  console.error('');
+
+  throw new Error(`BLACKLIST_THREAT: ${errorMsg}`);
 }
 
 /**
@@ -76,10 +115,21 @@ function checkBlacklistThreat(errorMsg: string): void {
  * - Uses config file at server/config/tiger_openapi_config.properties
  * - Or set TIGER_CONFIG_PATH environment variable
  *
- * Rate Limits (SAFETY - running at HALF capacity):
- * - Tiger High-frequency limit: 120 requests/minute
- * - Our CONSERVATIVE limit: 60 requests/minute (50% of max)
- * - Sliding window: 60 seconds
+ * Rate Limits (per Tiger Open API documentation):
+ * - High-frequency APIs (get_stock_briefs): 120 requests/minute
+ * - Medium-frequency APIs (get_bars, get_depth_quote): 60 requests/minute
+ * - Low-frequency APIs (grab_quote_permission): 10 requests/minute
+ *
+ * NOTE: We use get_bars (medium-frequency) for all historical data including 1-minute
+ * because get_timeline returns 0 prices for OHLC data. This means more conservative
+ * rate limiting for historical data (60/min instead of 120/min).
+ *
+ * Our CONSERVATIVE limit: 60 requests/minute (50% of high-frequency max)
+ * Sliding window: 60 seconds
+ *
+ * ⚠️ IMPORTANT: We use is_grab_permission=False in Python script to avoid
+ * calling the low-frequency grab_quote_permission API (10/min limit).
+ * This allows us to use high-frequency APIs like get_stock_briefs (120/min).
  *
  * Batch Quote API (get_stock_briefs):
  * - Max 50 symbols per request
@@ -96,12 +146,16 @@ export class TigerClient {
   // Rate limiting - CONSERVATIVE (50% of max to stay safe)
   // Tiger allows 120/min for high-frequency, we use 60/min
   private requestTimestamps: number[] = [];
-  private readonly maxRequestsPerMinute = 60; // HALF of 120 for safety
+  private readonly maxRequestsPerMinute = 100; // Conservative limit (83% of 120)
   private readonly minRequestIntervalMs = 1000; // 1 second between requests
   private readonly slidingWindowMs = 60000; // 60 second sliding window
 
-  // Track if we've hit a blacklist threat
+  // Track if we've hit a blacklist threat (permanent)
   private blacklistThreatDetected = false;
+
+  // Track rate limit pause (temporary, clears after cooldown)
+  private rateLimitPauseUntil: number = 0;
+  private readonly rateLimitCooldownMs = 60_000; // 60 seconds cooldown after rate limit error
 
   constructor() {
     this.pythonBin = config.tiger.python;
@@ -112,7 +166,7 @@ export class TigerClient {
     console.log('');
     console.log('⚠️  Tiger API Safety Configuration:');
     console.log(`   Max rate limit: 120 requests/minute (Tiger's limit)`);
-    console.log(`   Our limit: 60 requests/minute (50% for safety)`);
+    console.log(`   Our limit: 100 requests/minute (83% for safety)`);
     console.log(`   Min interval: 1 second between requests`);
     console.log('⚠️  Blacklist protection: ENABLED');
     console.log('');
@@ -131,6 +185,9 @@ export class TigerClient {
   async getQuote(symbol: string): Promise<TigerQuote> {
     this.guardBlacklist();
     await this.rateLimit();
+
+    // Record API call - get_stock_briefs is high-frequency API
+    rateLimitMonitor.recordCall('high_frequency');
 
     try {
       const result = await this.callPython('quotes', symbol);
@@ -160,7 +217,12 @@ export class TigerClient {
     const results: TigerQuote[] = [];
 
     for (let i = 0; i < batches.length; i++) {
+      // Check rate limit pause before each batch
+      this.guardBlacklist();
       await this.rateLimit();
+
+      // Record API call - get_stock_briefs is high-frequency API
+      rateLimitMonitor.recordCall('high_frequency');
 
       try {
         const json = await this.callPython('quotes', batches[i].join(','));
@@ -168,10 +230,22 @@ export class TigerClient {
         results.push(...quotes);
       } catch (error: any) {
         this.handleError(error);
+
+        // If rate limit pause was triggered, wait and retry this batch
+        if (this.isInRateLimitPause() && !this.blacklistThreatDetected) {
+          const waitMs = this.rateLimitPauseUntil - Date.now();
+          console.log(`⏳ Rate limit pause active, waiting ${(waitMs / 1000).toFixed(1)}s before retrying batch ${i + 1}...`);
+          await this.sleep(waitMs);
+          // Retry this batch (don't increment i)
+          i--;
+          continue;
+        }
+
         // Don't continue if we hit a blacklist threat
         if (this.blacklistThreatDetected) {
           break;
         }
+
         console.warn(`Skipping batch ${i + 1}/${batches.length} due to error:`, error.message);
       }
     }
@@ -212,13 +286,26 @@ export class TigerClient {
     const tigerPeriod = this.mapInterval(interval);
 
     try {
-      // For 1m interval, use timeline action (latest trading day only)
+      // Use get_bars for all intervals including 1m
+      // get_timeline returns 0 prices for OHLC data, but get_bars works correctly
       if (interval === '1m') {
-        const result = await this.callPython('timeline', symbol);
-        return this.parseHistorical(result);
+        // Record API call - get_bars is medium-frequency API (60/min)
+        rateLimitMonitor.recordCall('medium_frequency');
+        const result = await this.callPython(
+          'bars',
+          symbol,
+          '1min'  // Tiger's 1-minute period format
+        );
+
+        const data = this.parseHistorical(result);
+        // Filter to only return last ~60 minutes of data for 1m interval
+        const cutoffTime = new Date(endTime.getTime() - 60 * 60 * 1000); // 1 hour lookback
+        return data.filter(h => h.date >= cutoffTime && h.date <= endTime);
       }
 
       // For other intervals, use bars action
+      // Record API call - get_bars is medium-frequency API
+      rateLimitMonitor.recordCall('medium_frequency');
       const result = await this.callPython(
         'bars',
         symbol,
@@ -250,40 +337,49 @@ export class TigerClient {
   // ============ Private Helper Methods ============
 
   /**
-   * Guard against blacklist - check before every API call
+   * Guard against blacklist and rate limit pause - check before every API call
    */
   private guardBlacklist(): void {
+    // Check for permanent blacklist threat
     if (this.blacklistThreatDetected) {
       throw new Error('🚫 Tiger API disabled due to blacklist threat. Do not make any more calls!');
+    }
+
+    // Check for temporary rate limit pause
+    const now = Date.now();
+    if (now < this.rateLimitPauseUntil) {
+      const waitSeconds = Math.ceil((this.rateLimitPauseUntil - now) / 1000);
+      throw new Error(`⏳ Tiger API temporarily paused due to rate limit. Wait ${waitSeconds}s before retrying.`);
     }
   }
 
   /**
-   * Handle errors with blacklist detection
+   * Check if we're currently in rate limit pause period
+   */
+  isInRateLimitPause(): boolean {
+    return Date.now() < this.rateLimitPauseUntil;
+  }
+
+  /**
+   * Handle errors with blacklist/rate-limit detection
    */
   private handleError(error: any): void {
     const errorMsg = error.message || String(error);
+    const errorType = checkErrorType(errorMsg);
 
-    // Check for blacklist threat keywords
-    for (const keyword of DANGER_KEYWORDS) {
-      if (errorMsg.toLowerCase().includes(keyword.toLowerCase())) {
-        this.blacklistThreatDetected = true;
-
-        console.error('');
-        console.error('='.repeat(70));
-        console.error('🚫🚫🚫 BLACKLIST THREAT DETECTED 🚫🚫🚫');
-        console.error('='.repeat(70));
-        console.error(`Error: ${errorMsg}`);
-        console.error('ALL TIGER API CALLS STOPPED TO PROTECT YOUR ACCOUNT!');
-        console.error('DO NOT MAKE ANY MORE API CALLS!');
-        console.error('='.repeat(70));
-        console.error('');
-
-        throw error;
-      }
+    if (errorType === 'blacklist') {
+      // Permanent blacklist threat - stop all operations
+      this.blacklistThreatDetected = true;
+      logBlacklistThreat(errorMsg);
+    } else if (errorType === 'rate_limit') {
+      // Temporary rate limit - pause for cooldown period
+      this.rateLimitPauseUntil = Date.now() + this.rateLimitCooldownMs;
+      console.warn(`⚠️ Tiger API rate limit detected. Pausing for ${this.rateLimitCooldownMs / 1000}s.`);
+      console.warn(`   Error: ${errorMsg.slice(0, 100)}...`);
+    } else {
+      // Other error - just log it
+      console.error('Tiger API error:', errorMsg.slice(0, 200));
     }
-
-    console.error('Tiger API error:', errorMsg);
   }
 
   /**

@@ -328,7 +328,8 @@ server/
 | `STOP_LOSS_PCT` | 50 | 止损百分比 |
 | `SAMPLING_INTERVAL` | 30 | 采样间隔（秒） |
 | `LOOKBACK_WINDOW` | 30 | 回溯窗口（分钟） |
-| `LAG_INTERVALS` | 10 | 滞后周期数（=5 分钟） |
+| `LAG_INTERVALS` | 2 | 滞后周期数（=1 分钟） |
+| `MAX_PAIRS` | 400 | 交易对上限 |
 
 ---
 

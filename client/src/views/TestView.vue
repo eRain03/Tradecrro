@@ -10,7 +10,7 @@ const selectedDate = ref('');
 // Parameter state
 const samplingInterval = ref(30); // seconds
 const lookbackWindow = ref(30); // minutes
-const lagIntervals = ref(10); // number of intervals
+const lagIntervals = ref(2); // number of intervals (1 minute)
 
 // Cached raw data (1-minute bars)
 interface RawBar {

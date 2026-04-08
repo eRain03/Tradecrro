@@ -107,6 +107,26 @@ class ApiClient {
     return this.fetch('/health');
   }
 
+  // Rate Limit Monitoring
+  async getRateLimits(): Promise<{
+    health: {
+      status: 'healthy' | 'warning' | 'danger';
+      message: string;
+    };
+    statuses: Record<string, {
+      name: string;
+      current: number;
+      max: number;
+      safeLimit: number;
+      percentage: number;
+      status: 'safe' | 'warning' | 'danger' | 'critical';
+      remaining: number;
+    }>;
+    timestamp: string;
+  }> {
+    return this.fetch('/api/monitoring/rate-limits');
+  }
+
   // Pairs
   async getPairs(): Promise<Pair[]> {
     return this.fetch('/api/pairs');

@@ -7,6 +7,7 @@ import { seedData } from './database/seed';
 import UnifiedDataFetcher from './data/UnifiedDataFetcher';
 import SignalGenerator from './strategy/SignalGenerator';
 import { AIPairMiner } from './core/ai/AIPairMiner';
+import { getAutoTrader } from './api/routes/autoTrading';
 
 // Import routes
 import pairsRoutes from './api/routes/pairs';
@@ -15,6 +16,8 @@ import tradesRoutes from './api/routes/trades';
 import settingsRoutes from './api/routes/settings';
 import backtestRoutes from './api/routes/backtest';
 import testRoutes from './api/routes/test';
+import monitoringRoutes from './api/routes/monitoring';
+import autoTradingRoutes from './api/routes/autoTrading';
 import { wsService } from './api/websocket';
 
 const app = express();
@@ -42,6 +45,8 @@ app.use('/api/trades', tradesRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api/backtest', backtestRoutes);
 app.use('/api/test', testRoutes);
+app.use('/api/monitoring', monitoringRoutes);
+app.use('/api/auto-trading', autoTradingRoutes);
 
 // Initialize database
 runMigrations();
@@ -50,6 +55,14 @@ seedData();
 // Initialize data fetcher and signal generator
 const dataFetcher = new UnifiedDataFetcher(config.dataSource.provider);
 const signalGenerator = new SignalGenerator(dataFetcher);
+
+// Initialize auto trader (disabled by default, enable via API)
+const autoTrader = getAutoTrader({
+  enabled: config.autoTrading.enabled,
+  dryRun: config.autoTrading.dryRun,
+  maxPositionSize: config.autoTrading.maxPositionSize,
+  maxPositionValue: config.autoTrading.maxPositionValue,
+});
 
 // Start data fetching
 async function startDataFetching() {
@@ -74,7 +87,15 @@ async function startDataFetching() {
       setInterval(async () => {
         try {
           const signals = await signalGenerator.generateAllSignals();
-          console.log(`Generated ${signals.length} signals, ${signals.filter(s => s.triggered).length} triggered`);
+          const triggeredSignals = signals.filter(s => s.triggered);
+          console.log(`Generated ${signals.length} signals, ${triggeredSignals.length} triggered`);
+
+          // Process triggered signals through auto trader
+          for (const signal of triggeredSignals) {
+            if (signal.entryConfirmed) {
+              await autoTrader.processSignal(signal);
+            }
+          }
         } catch (error) {
           console.error('Signal generation error:', error);
         }
@@ -105,6 +126,9 @@ app.listen(PORT, () => {
   miner.cleanupLowLiquidityPairs().then(() => {
     miner.start();
   });
+
+  // Export miner for settings updates
+  (global as any).__aiPairMiner = miner;
 });
 
 export default app;

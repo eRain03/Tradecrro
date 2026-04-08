@@ -4,16 +4,58 @@ import api from '../api/http';
 
 const settings = ref<Record<string, string>>({});
 const loading = ref(true);
+const editingMaxPairs = ref(false);
+const maxPairsInput = ref('');
+const saving = ref(false);
+const saveSuccess = ref(false);
 
 onMounted(async () => {
   try {
     settings.value = await api.getSettings();
+    maxPairsInput.value = settings.value.max_pairs || '400';
   } catch (e) {
     console.error('Failed to load settings');
   } finally {
     loading.value = false;
   }
 });
+
+const startEditMaxPairs = () => {
+  editingMaxPairs.value = true;
+  maxPairsInput.value = settings.value.max_pairs || '400';
+};
+
+const cancelEditMaxPairs = () => {
+  editingMaxPairs.value = false;
+  maxPairsInput.value = settings.value.max_pairs || '400';
+};
+
+const saveMaxPairs = async () => {
+  const value = parseInt(maxPairsInput.value, 10);
+  if (value < 1 || value > 10000 || !Number.isFinite(value)) {
+    alert('Please enter a valid number between 1 and 10000');
+    return;
+  }
+
+  saving.value = true;
+  try {
+    await api.updateSetting('max_pairs', String(value));
+    settings.value.max_pairs = String(value);
+    settings.value.current_pair_count = settings.value.current_pair_count || '0';
+    editingMaxPairs.value = false;
+    saveSuccess.value = true;
+    setTimeout(() => {
+      saveSuccess.value = false;
+    }, 2000);
+    // Refresh settings to get updated pair count
+    settings.value = await api.getSettings();
+  } catch (e) {
+    console.error('Failed to save max_pairs');
+    alert('Failed to save setting');
+  } finally {
+    saving.value = false;
+  }
+};
 </script>
 
 <template>
@@ -111,9 +153,59 @@ onMounted(async () => {
               <span class="setting-desc">Price lag calculation periods</span>
             </div>
             <div class="setting-value">
-              <span class="value-badge">{{ settings.lag_intervals || '10' }}</span>
+              <span class="value-badge">{{ settings.lag_intervals || '2' }}</span>
             </div>
           </div>
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <div class="section-header">
+          <h2>
+            <span class="section-icon">◈</span>
+            AI PAIR MINING
+          </h2>
+        </div>
+        <div class="setting-list">
+          <div class="setting-row">
+            <div class="setting-info">
+              <span class="setting-label">Max Pairs Limit</span>
+              <span class="setting-desc">Maximum number of active trading pairs</span>
+            </div>
+            <div class="setting-value editable">
+              <template v-if="!editingMaxPairs">
+                <span class="value-badge">{{ settings.max_pairs || '400' }}</span>
+                <button class="edit-btn" @click="startEditMaxPairs">EDIT</button>
+              </template>
+              <template v-else>
+                <input
+                  type="number"
+                  v-model.number="maxPairsInput"
+                  class="edit-input"
+                  min="1"
+                  max="10000"
+                />
+                <button class="save-btn" @click="saveMaxPairs" :disabled="saving">
+                  {{ saving ? 'SAVING...' : 'SAVE' }}
+                </button>
+                <button class="cancel-btn" @click="cancelEditMaxPairs">CANCEL</button>
+              </template>
+            </div>
+          </div>
+          <div class="setting-row">
+            <div class="setting-info">
+              <span class="setting-label">Current Pair Count</span>
+              <span class="setting-desc">Number of currently active pairs</span>
+            </div>
+            <div class="setting-value">
+              <span class="value-badge" :class="{ 'warning': parseInt(settings.current_pair_count || '0') >= parseInt(settings.max_pairs || '400') }">
+                {{ settings.current_pair_count || '0' }} / {{ settings.max_pairs || '400' }}
+              </span>
+            </div>
+          </div>
+        </div>
+        <div v-if="saveSuccess" class="save-success-message">
+          ✓ Max pairs limit updated successfully
         </div>
       </div>
 
@@ -348,5 +440,102 @@ onMounted(async () => {
 .source-badge.demo {
   color: #b36b00;
   border-color: #b36b00;
+}
+
+/* Editable settings */
+.setting-value.editable {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.edit-btn {
+  padding: 4px 8px;
+  background: #f8f9fa;
+  border: 1px solid #c4c4c4;
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 0.65em;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.edit-btn:hover {
+  background: #e9ecef;
+  border-color: #8b8b8b;
+}
+
+.edit-input {
+  padding: 5px 8px;
+  border: 2px solid #0056b3;
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 0.85em;
+  font-weight: 700;
+  width: 80px;
+  text-align: center;
+}
+
+.edit-input:focus {
+  outline: none;
+  border-color: #003d7a;
+}
+
+.save-btn {
+  padding: 4px 10px;
+  background: #1a7f37;
+  color: #fff;
+  border: 1px solid #0f5a22;
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 0.65em;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.save-btn:hover:not(:disabled) {
+  background: #155724;
+}
+
+.save-btn:disabled {
+  background: #8b8b8b;
+  cursor: not-allowed;
+}
+
+.cancel-btn {
+  padding: 4px 8px;
+  background: #f8f9fa;
+  border: 1px solid #c4c4c4;
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 0.65em;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.cancel-btn:hover {
+  background: #e9ecef;
+}
+
+.value-badge.warning {
+  background: #fff3cd;
+  color: #856404;
+  border-color: #856404;
+}
+
+.save-success-message {
+  padding: 10px 16px;
+  margin: 8px 16px;
+  background: #d4edda;
+  color: #1a7f37;
+  border: 1px solid #c3e6cb;
+  font-size: 0.85em;
+  font-weight: 600;
+  font-family: 'Courier New', Courier, monospace;
 }
 </style>

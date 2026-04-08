@@ -446,11 +446,35 @@ export class UnifiedDataFetcher {
   private async fetchHistoricalData(symbol: string): Promise<void> {
     try {
       if (this.source === 'tiger' && this.tigerClient) {
-        // Tiger API: use timeline for intraday 1-minute data
+        // Tiger API: use bars for intraday 1-minute data
         const historical = await this.tigerClient.getHistoricalData(symbol, '1d', '1m');
 
         // Filter out invalid data (zero or null prices)
         const validHistorical = historical.filter(h => h.close > 0 && Number.isFinite(h.close));
+
+        // If Tiger returns empty (symbol not in permission list), fallback to Yahoo Finance
+        if (validHistorical.length === 0) {
+          console.log(`⚠️ Tiger historical data empty for ${symbol}, falling back to Yahoo Finance`);
+          const yahooHistorical = await this.yahooClient.getHistoricalData(symbol, '1d', '1m');
+          const validYahoo = yahooHistorical.filter(h => h.close > 0 && Number.isFinite(h.close));
+
+          const stockData: StockData[] = validYahoo.map((h) => ({
+            symbol,
+            timestamp: h.date,
+            price: h.close,
+            bid: h.low,
+            ask: h.high,
+            volume: this.toFinite(h.volume),
+            source: 'yahoo',
+          }));
+
+          this.priceHistory.set(symbol, stockData.slice(-(this.lookbackPoints + 1)));
+          for (const data of stockData.slice(-(this.lookbackPoints + 1))) {
+            this.saveToDatabase(data);
+          }
+          console.log(`📊 Loaded ${Math.min(stockData.length, this.lookbackPoints + 1)} historical prices for ${symbol} (Yahoo fallback)`);
+          return;
+        }
 
         const stockData: StockData[] = validHistorical.map((h) => ({
           symbol,

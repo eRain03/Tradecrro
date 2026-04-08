@@ -29,7 +29,8 @@ export function seedData(): void {
     ['stop_loss_pct', '50'],
     ['sampling_interval', '30'],
     ['lookback_window', '30'],
-    ['lag_intervals', '10'],
+    ['lag_intervals', '2'],
+    ['max_pairs', '400'],
     ['is_simulated', '1'],
   ];
 

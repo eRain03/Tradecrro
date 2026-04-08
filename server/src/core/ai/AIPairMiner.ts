@@ -1,7 +1,6 @@
 import axios from 'axios';
 import { getDatabase } from '../../database/connection';
-import { YahooFinanceClient } from '../../data/YahooFinanceClient';
-import TigerClient from '../../data/TigerClient';
+import { DatabentoHistorical } from '../../data/DatabentoHistorical';
 import UnifiedDataFetcher from '../../data/UnifiedDataFetcher';
 import config from '../../config';
 
@@ -51,33 +50,128 @@ const POOL_OF_TICKERS = [
 export class AIPairMiner {
   private isRunning = false;
   private timer: NodeJS.Timeout | null = null;
-  private yahooClient = new YahooFinanceClient();
-  private tigerClient: TigerClient | null = null;
+  private databentoClient = new DatabentoHistorical();
   private dataFetcher: UnifiedDataFetcher;
-  private readonly MAX_PAIRS = 400;
+  private maxPairs: number;
+
+  // Liquidity cache: symbol -> daily traded value (from historical data)
+  private liquidityCache = new Map<string, number>();
+  private liquidityCacheDate: string | null = null;
 
   constructor(dataFetcher: UnifiedDataFetcher) {
     this.dataFetcher = dataFetcher;
-
-    // Initialize Tiger client if configured
-    if (config.dataSource.provider === 'tiger') {
-      this.tigerClient = new TigerClient();
-    }
+    this.maxPairs = config.trading.maxPairs;
   }
 
   /**
-   * Get quote using the configured data source
+   * Get current max pairs limit
    */
-  private async getQuote(symbol: string) {
-    if (this.tigerClient) {
-      return this.tigerClient.getQuote(symbol);
+  public getMaxPairs(): number {
+    return this.maxPairs;
+  }
+
+  /**
+   * Update max pairs limit
+   */
+  public setMaxPairs(limit: number): void {
+    this.maxPairs = limit;
+    console.log(`[AIPairMiner] 交易对上限已更新为 ${limit}`);
+  }
+
+  /**
+   * Get the most recent trading day (skip weekends and holidays)
+   * Returns a date that is N days before today, adjusting for non-trading days
+   */
+  private getRecentTradingDay(daysBack: number = 2): { start: Date; end: Date } {
+    const now = new Date();
+    let targetDate = new Date(now);
+    let count = 0;
+
+    // Walk back daysBack trading days (skip weekends)
+    while (count < daysBack) {
+      targetDate.setDate(targetDate.getDate() - 1);
+      const dayOfWeek = targetDate.getDay();
+      // Skip Saturday (6) and Sunday (0)
+      if (dayOfWeek !== 0 && dayOfWeek !== 6) {
+        count++;
+      }
     }
-    return this.yahooClient.getQuote(symbol);
+
+    // Set to market hours (9:30 AM - 4:00 PM ET, but we use UTC)
+    // Databento uses UTC timestamps
+    const start = new Date(targetDate);
+    start.setHours(4, 0, 0, 0); // 4:00 AM UTC (pre-market)
+    const end = new Date(targetDate);
+    end.setHours(20, 0, 0, 0); // 8:00 PM UTC (after market close)
+
+    return { start, end };
+  }
+
+  /**
+   * Fetch historical data for a symbol and calculate daily traded value
+   * Uses cache to avoid repeated API calls
+   */
+  private async getDailyTradedValue(symbol: string): Promise<number | null> {
+    // Check cache freshness (same trading day)
+    const todayKey = new Date().toISOString().slice(0, 10);
+    if (this.liquidityCacheDate !== todayKey) {
+      this.liquidityCache.clear();
+      this.liquidityCacheDate = todayKey;
+    }
+
+    // Return cached value if available
+    if (this.liquidityCache.has(symbol)) {
+      return this.liquidityCache.get(symbol)!;
+    }
+
+    try {
+      // Get data from 2 trading days ago
+      const { start, end } = this.getRecentTradingDay(2);
+
+      // Try multiple days if the first one returns no data (holiday)
+      let historicalData: any[] = [];
+      let attemptDays = 2;
+
+      while (historicalData.length === 0 && attemptDays <= 7) {
+        const range = this.getRecentTradingDay(attemptDays);
+        try {
+          historicalData = await this.databentoClient.getHistoricalRange(
+            symbol,
+            range.start,
+            range.end,
+            '1m'
+          );
+          if (historicalData.length > 0) break;
+        } catch {
+          // Try next day
+        }
+        attemptDays++;
+      }
+
+      if (historicalData.length === 0) {
+        console.warn(`[AIPairMiner] ${symbol} 无历史数据`);
+        return null;
+      }
+
+      // Calculate total daily volume and average price
+      const totalVolume = historicalData.reduce((sum, bar) => sum + (bar.volume || 0), 0);
+      const avgPrice = historicalData.reduce((sum, bar) => sum + (bar.close || 0), 0) / historicalData.length;
+      const dailyValue = totalVolume * avgPrice;
+
+      // Cache the result
+      this.liquidityCache.set(symbol, dailyValue);
+
+      console.log(`[AIPairMiner] ${symbol} 日交易额: $${(dailyValue/1000000).toFixed(1)}M (from ${attemptDays} days ago)`);
+      return dailyValue;
+    } catch (err: any) {
+      console.warn(`[AIPairMiner] 获取 ${symbol} 历史数据失败:`, err.message);
+      return null;
+    }
   }
 
   // API settings
   private API_URL = 'https://apis.iflow.cn/v1/chat/completions';
-  private API_KEY = 'sk-b9473bb7ea43b38d86c20816f6ce1d68';
+  private API_KEY = 'sk-20a0d310c1a0fc3f53f65d5da9b42280';
   private MODEL = 'qwen3-max';
 
   public start() {
@@ -101,20 +195,20 @@ export class AIPairMiner {
   }
 
   /**
-   * Trim pairs to MAX_PAIRS by deleting oldest pairs (lowest id)
+   * Trim pairs to maxPairs by deleting oldest pairs (lowest id)
    */
   public trimPairsToLimit(): number {
     const db = getDatabase();
     const countRow = db.prepare('SELECT COUNT(*) as count FROM stock_pairs WHERE is_active = 1').get() as { count: number };
     const currentCount = countRow.count;
 
-    if (currentCount <= this.MAX_PAIRS) {
-      console.log(`[AIPairMiner] 当前交易对数量 ${currentCount}，未超过上限 ${this.MAX_PAIRS}`);
+    if (currentCount <= this.maxPairs) {
+      console.log(`[AIPairMiner] 当前交易对数量 ${currentCount}，未超过上限 ${this.maxPairs}`);
       return 0;
     }
 
-    const toDelete = currentCount - this.MAX_PAIRS;
-    console.log(`[AIPairMiner] 交易对数量 ${currentCount} 超过上限 ${this.MAX_PAIRS}，删除 ${toDelete} 个最旧的交易对...`);
+    const toDelete = currentCount - this.maxPairs;
+    console.log(`[AIPairMiner] 交易对数量 ${currentCount} 超过上限 ${this.maxPairs}，删除 ${toDelete} 个最旧的交易对...`);
 
     // Get IDs to delete
     const idsToDelete = db.prepare(`
@@ -136,6 +230,7 @@ export class AIPairMiner {
 
   /**
    * Clean up pairs with low liquidity (daily traded value < $10M)
+   * Uses Databento historical data from recent trading days
    */
   public async cleanupLowLiquidityPairs(): Promise<number> {
     const db = getDatabase();
@@ -143,30 +238,35 @@ export class AIPairMiner {
       SELECT id, stock_a, stock_b FROM stock_pairs WHERE is_active = 1
     `).all() as Array<{ id: number; stock_a: string; stock_b: string }>;
 
-    console.log(`[AIPairMiner] 检查 ${pairs.length} 个活跃交易对的流动性...`);
+    console.log(`[AIPairMiner] 检查 ${pairs.length} 个活跃交易对的流动性 (使用 Databento 历史数据)...`);
     let deactivatedCount = 0;
     const MIN_VALUE = 10_000_000;
 
     for (const pair of pairs) {
       try {
-        const quoteA = await this.getQuote(pair.stock_a);
-        const quoteB = await this.getQuote(pair.stock_b);
-        const valueA = quoteA.price * quoteA.volume;
-        const valueB = quoteB.price * quoteB.volume;
+        const valueA = await this.getDailyTradedValue(pair.stock_a);
+        const valueB = await this.getDailyTradedValue(pair.stock_b);
 
-        if (valueA < MIN_VALUE || valueB < MIN_VALUE) {
+        if (valueA === null || valueA < MIN_VALUE) {
           db.prepare(`UPDATE stock_pairs SET is_active = 0 WHERE id = ?`).run(pair.id);
           deactivatedCount++;
           console.log(
             `[AIPairMiner] 停用低流动性交易对 ${pair.stock_a}/${pair.stock_b}: ` +
-            `$${(valueA/1000000).toFixed(1)}M / $${(valueB/1000000).toFixed(1)}M`
+            `${pair.stock_a} $${valueA ? (valueA/1000000).toFixed(1) : 'N/A'}M < $10M`
           );
+          continue;
         }
 
-        // Rate limiting
-        await new Promise(resolve => setTimeout(resolve, 100));
+        if (valueB === null || valueB < MIN_VALUE) {
+          db.prepare(`UPDATE stock_pairs SET is_active = 0 WHERE id = ?`).run(pair.id);
+          deactivatedCount++;
+          console.log(
+            `[AIPairMiner] 停用低流动性交易对 ${pair.stock_a}/${pair.stock_b}: ` +
+            `${pair.stock_b} $${valueB ? (valueB/1000000).toFixed(1) : 'N/A'}M < $10M`
+          );
+        }
       } catch (err: any) {
-        // If we can't get quotes, deactivate the pair
+        // If we can't get data, deactivate the pair
         db.prepare(`UPDATE stock_pairs SET is_active = 0 WHERE id = ?`).run(pair.id);
         deactivatedCount++;
         console.log(`[AIPairMiner] 停用无法验证的交易对 ${pair.stock_a}/${pair.stock_b}: ${err.message}`);
@@ -184,13 +284,13 @@ export class AIPairMiner {
       // Check if we've reached the max pairs limit
       const db = getDatabase();
       const countRow = db.prepare('SELECT COUNT(*) as count FROM stock_pairs WHERE is_active = 1').get() as { count: number };
-      if (countRow.count >= this.MAX_PAIRS) {
-        console.log(`[AIPairMiner] 已达到交易对上限 (${countRow.count}/${this.MAX_PAIRS})，跳过本轮挖掘`);
+      if (countRow.count >= this.maxPairs) {
+        console.log(`[AIPairMiner] 已达到交易对上限 (${countRow.count}/${this.maxPairs})，跳过本轮挖掘`);
         return;
       }
 
       console.log('[AIPairMiner] 开始新一轮挖掘...');
-      console.log(`[AIPairMiner] 当前交易对数量: ${countRow.count}/${this.MAX_PAIRS}`);
+      console.log(`[AIPairMiner] 当前交易对数量: ${countRow.count}/${this.maxPairs}`);
 
       // 1. Pick a random batch of 100 symbols
       const batch = this.getRandomBatch(POOL_OF_TICKERS, 100);
@@ -303,21 +403,19 @@ export class AIPairMiner {
   }
 
   private async verifyLiquidity(stockA: string, stockB: string): Promise<boolean> {
+    const MIN_VALUE = 10_000_000;
+
     try {
-      const quoteA = await this.getQuote(stockA);
-      const quoteB = await this.getQuote(stockB);
+      const valueA = await this.getDailyTradedValue(stockA);
+      const valueB = await this.getDailyTradedValue(stockB);
 
-      // Check daily traded value (Price * Volume). Minimum $10,000,000
-      const valueA = quoteA.price * quoteA.volume;
-      const valueB = quoteB.price * quoteB.volume;
-      const MIN_VALUE = 10_000_000;
-
-      if (valueA < MIN_VALUE) {
-        console.log(`[AIPairMiner] 剔除对子 ${stockA}/${stockB}: ${stockA} 流动性不足 ($${(valueA/1000000).toFixed(1)}M < $10M)`);
+      if (valueA === null || valueA < MIN_VALUE) {
+        console.log(`[AIPairMiner] 剔除对子 ${stockA}/${stockB}: ${stockA} 流动性不足 ($${valueA ? (valueA/1000000).toFixed(1) : 'N/A'}M < $10M)`);
         return false;
       }
-      if (valueB < MIN_VALUE) {
-        console.log(`[AIPairMiner] 剔除对子 ${stockA}/${stockB}: ${stockB} 流动性不足 ($${(valueB/1000000).toFixed(1)}M < $10M)`);
+
+      if (valueB === null || valueB < MIN_VALUE) {
+        console.log(`[AIPairMiner] 剔除对子 ${stockA}/${stockB}: ${stockB} 流动性不足 ($${valueB ? (valueB/1000000).toFixed(1) : 'N/A'}M < $10M)`);
         return false;
       }
 
