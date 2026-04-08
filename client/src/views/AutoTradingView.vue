@@ -71,7 +71,6 @@ const fetchStatus = async () => {
 
 const fetchPositions = async () => {
   try {
-    // Get positions from Tiger trade client
     const res = await fetch('/api/auto-trading/positions');
     if (res.ok) {
       positions.value = await res.json();
@@ -139,7 +138,7 @@ const disableTrading = async () => {
 };
 
 const closeAllTrades = async () => {
-  if (!confirm('确定要平掉所有仓位吗？')) return;
+  if (!confirm('Are you sure you want to close all positions?')) return;
 
   loading.value = true;
   try {
@@ -160,7 +159,6 @@ const testOrder = async () => {
   testResult.value = null;
 
   try {
-    // Test by placing a small order (1 share of AAPL) in simulation mode
     const res = await fetch('/api/auto-trading/test-order', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -172,19 +170,19 @@ const testOrder = async () => {
     const data = await res.json();
 
     if (data.success) {
-      testResult.value = `✅ 测试成功: ${data.message || 'Order test passed'}`;
+      testResult.value = `✅ Test passed: ${data.message || 'Tiger API connection OK'}`;
     } else {
-      testResult.value = `❌ 测试失败: ${data.error || 'Unknown error'}`;
+      testResult.value = `❌ Test failed: ${data.error || 'Unknown error'}`;
     }
   } catch (e: any) {
-    testResult.value = `❌ 请求失败: ${e.message}`;
+    testResult.value = `❌ Request failed: ${e.message}`;
   } finally {
     testLoading.value = false;
   }
 };
 
 const formatTime = (time: string) => {
-  return new Date(time).toLocaleString('zh-CN');
+  return new Date(time).toLocaleString('en-US');
 };
 
 const formatPnl = (pnl?: number) => {
@@ -202,7 +200,6 @@ onMounted(() => {
   fetchStatus();
   fetchHistory();
 
-  // Refresh every 10 seconds
   refreshInterval = setInterval(() => {
     fetchStatus();
     fetchHistory();
@@ -217,43 +214,43 @@ onUnmounted(() => {
 <template>
   <div class="auto-trading-view">
     <div class="page-header">
-      <h1>🤖 自动交易</h1>
-      <p>Tiger API 自动交易控制面板</p>
+      <h1>🤖 Auto Trading</h1>
+      <p>Tiger API automated trading control panel</p>
     </div>
 
     <!-- Status Card -->
     <div class="card status-card">
       <div class="card-header">
-        <h2>📊 状态</h2>
+        <h2>📊 Status</h2>
         <div class="status-badges">
           <span class="badge" :class="status?.enabled ? 'enabled' : 'disabled'">
-            {{ status?.enabled ? '✅ 已启用' : '⏹️ 已禁用' }}
+            {{ status?.enabled ? '✅ Enabled' : '⏹️ Disabled' }}
           </span>
           <span class="badge" :class="status?.dryRun ? 'dry-run' : 'live'">
-            {{ status?.dryRun ? '🧪 模拟模式' : '⚠️ 实盘模式' }}
+            {{ status?.dryRun ? '🧪 Simulation' : '⚠️ LIVE' }}
           </span>
         </div>
       </div>
 
       <div class="status-content">
         <div class="status-item">
-          <span class="label">活跃交易</span>
+          <span class="label">Active Trades</span>
           <span class="value">{{ status?.activeTrades || 0 }}</span>
         </div>
         <div class="status-item">
-          <span class="label">最大仓位 (股)</span>
+          <span class="label">Max Position (shares)</span>
           <span class="value">{{ status?.config?.maxPositionSize || 100 }}</span>
         </div>
         <div class="status-item">
-          <span class="label">最大仓位 ($)</span>
+          <span class="label">Max Position ($)</span>
           <span class="value">${{ status?.config?.maxPositionValue || 10000 }}</span>
         </div>
         <div class="status-item">
-          <span class="label">止盈</span>
+          <span class="label">Take Profit</span>
           <span class="value positive">+{{ status?.config?.takeProfitPct || 200 }}%</span>
         </div>
         <div class="status-item">
-          <span class="label">止损</span>
+          <span class="label">Stop Loss</span>
           <span class="value negative">-{{ status?.config?.stopLossPct || 50 }}%</span>
         </div>
       </div>
@@ -264,28 +261,28 @@ onUnmounted(() => {
           @click="enableTrading(true)"
           :disabled="loading || status?.enabled"
         >
-          🧪 启用 (模拟)
+          🧪 Enable (Simulation)
         </button>
         <button
           class="btn btn-warning"
           @click="enableTrading(false)"
           :disabled="loading || status?.enabled"
         >
-          ⚠️ 启用 (实盘)
+          ⚠️ Enable (LIVE)
         </button>
         <button
           class="btn btn-danger"
           @click="disableTrading"
           :disabled="loading || !status?.enabled"
         >
-          🛑 禁用
+          🛑 Disable
         </button>
         <button
           class="btn btn-secondary"
           @click="closeAllTrades"
           :disabled="loading"
         >
-          📉 平掉所有仓位
+          📉 Close All Positions
         </button>
       </div>
     </div>
@@ -293,12 +290,12 @@ onUnmounted(() => {
     <!-- Test Order Card -->
     <div class="card test-card">
       <div class="card-header">
-        <h2>🧪 测试下单</h2>
+        <h2>🧪 Test Order</h2>
       </div>
       <div class="test-content">
-        <p>点击按钮测试 Tiger API 下单是否正常工作（不会执行真实交易）</p>
+        <p>Click to test if Tiger API order execution is working properly (will not execute real trades)</p>
         <button class="btn btn-primary" @click="testOrder" :disabled="testLoading">
-          {{ testLoading ? '测试中...' : '🧪 测试下单' }}
+          {{ testLoading ? 'Testing...' : '🧪 Test Order' }}
         </button>
         <div v-if="testResult" class="test-result" :class="testResult.includes('✅') ? 'success' : 'error'">
           {{ testResult }}
@@ -309,18 +306,18 @@ onUnmounted(() => {
     <!-- Active Trades -->
     <div class="card" v-if="status?.trades && status.trades.length > 0">
       <div class="card-header">
-        <h2>📈 活跃交易</h2>
+        <h2>📈 Active Trades</h2>
       </div>
       <div class="table-container">
         <table class="data-table">
           <thead>
             <tr>
-              <th>股票</th>
-              <th>方向</th>
-              <th>数量</th>
-              <th>入场价</th>
-              <th>入场时间</th>
-              <th>订单ID</th>
+              <th>Symbol</th>
+              <th>Action</th>
+              <th>Quantity</th>
+              <th>Entry Price</th>
+              <th>Entry Time</th>
+              <th>Order ID</th>
             </tr>
           </thead>
           <tbody>
@@ -340,22 +337,22 @@ onUnmounted(() => {
     <!-- Trade History -->
     <div class="card">
       <div class="card-header">
-        <h2>📜 交易历史</h2>
+        <h2>📜 Trade History</h2>
       </div>
       <div class="table-container">
         <table class="data-table">
           <thead>
             <tr>
-              <th>股票</th>
-              <th>方向</th>
-              <th>数量</th>
-              <th>入场价</th>
-              <th>出场价</th>
+              <th>Symbol</th>
+              <th>Action</th>
+              <th>Qty</th>
+              <th>Entry</th>
+              <th>Exit</th>
               <th>P&L %</th>
-              <th>入场时间</th>
-              <th>出场时间</th>
-              <th>状态</th>
-              <th>原因</th>
+              <th>Entry Time</th>
+              <th>Exit Time</th>
+              <th>Status</th>
+              <th>Reason</th>
             </tr>
           </thead>
           <tbody>
@@ -378,7 +375,7 @@ onUnmounted(() => {
           </tbody>
         </table>
         <div v-if="history.length === 0" class="empty-state">
-          暂无交易记录
+          No trade history
         </div>
       </div>
     </div>
