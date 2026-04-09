@@ -51,9 +51,28 @@ export interface AccountInfo {
   error?: string;
 }
 
+export interface OptionContract {
+  contractSymbol: string;
+  underlying: string;
+  strike: number;
+  expiration: string;
+  optionType: 'CALL' | 'PUT';
+  bid: number;
+  ask: number;
+  lastPrice: number;
+  volume: number;
+  openInterest: number;
+  delta: number;
+  gamma: number;
+  theta: number;
+  vega: number;
+  impliedVolatility: number;
+}
+
 export class TigerTradeClient {
   private pythonBin: string;
   private scriptPath: string;
+  private optionsScriptPath: string;
   private configPath: string;
 
   // Safety: require explicit enable
@@ -62,6 +81,7 @@ export class TigerTradeClient {
   constructor() {
     this.pythonBin = config.tiger.python;
     this.scriptPath = path.join(__dirname, '../../scripts/tiger_trade.py');
+    this.optionsScriptPath = path.join(__dirname, '../../scripts/tiger_options.py');
     this.configPath = config.tiger.configPath || path.join(__dirname, '../../config/tiger_openapi_config.properties');
 
     console.log('');
@@ -146,6 +166,56 @@ export class TigerTradeClient {
     console.log(`📉 [Tiger] LIMIT SELL: ${symbol} x ${quantity} @ $${price.toFixed(2)}`);
 
     return this.callPython('limit_sell', symbol, String(quantity), price.toFixed(2));
+  }
+
+  // ============ Options Trading Methods ============
+
+  /**
+   * Get option chain for a symbol
+   */
+  async getOptionChain(symbol: string): Promise<OptionContract[]> {
+    console.log(`📊 [Tiger] Getting option chain for ${symbol}...`);
+
+    const result = await this.callOptionsPython('chain', symbol);
+
+    if (Array.isArray(result)) {
+      return result as OptionContract[];
+    }
+
+    return [];
+  }
+
+  /**
+   * Get option quote for a specific contract
+   */
+  async getOptionQuote(contractSymbol: string): Promise<OptionContract | null> {
+    const result = await this.callOptionsPython('quote', contractSymbol);
+
+    if (result && result.contractSymbol) {
+      return result as OptionContract;
+    }
+
+    return null;
+  }
+
+  /**
+   * Buy to open option contract (limit order)
+   */
+  async limitBuyOption(contractSymbol: string, quantity: number, limitPrice: number): Promise<TradeResult> {
+    this.guardEnabled();
+    console.log(`📈 [Tiger] BUY OPTION: ${contractSymbol} x ${quantity} @ $${limitPrice.toFixed(2)}`);
+
+    return this.callOptionsPython('buy', contractSymbol, String(quantity), limitPrice.toFixed(2));
+  }
+
+  /**
+   * Sell to close option contract (limit order)
+   */
+  async limitSellOption(contractSymbol: string, quantity: number, limitPrice: number): Promise<TradeResult> {
+    this.guardEnabled();
+    console.log(`📉 [Tiger] SELL OPTION: ${contractSymbol} x ${quantity} @ $${limitPrice.toFixed(2)}`);
+
+    return this.callOptionsPython('sell', contractSymbol, String(quantity), limitPrice.toFixed(2));
   }
 
   /**
@@ -243,6 +313,38 @@ export class TigerTradeClient {
     } catch (error: any) {
       const errorMsg = error.stderr || error.message || String(error);
       console.error('[Tiger Trade] Error:', errorMsg);
+
+      return { ok: false, error: errorMsg };
+    }
+  }
+
+  private async callOptionsPython(action: string, ...args: string[]): Promise<any> {
+    const env = {
+      ...process.env,
+      TIGER_CONFIG_PATH: this.configPath,
+      PYTHONUNBUFFERED: '1',
+    };
+
+    try {
+      const { stdout, stderr } = await execFileAsync(
+        this.pythonBin,
+        [this.optionsScriptPath, action, ...args],
+        { env, maxBuffer: 10 * 1024 * 1024, timeout: 30_000 }
+      );
+
+      if (stderr) {
+        console.warn('[Tiger Options] stderr:', stderr.trim());
+      }
+
+      try {
+        return JSON.parse(stdout);
+      } catch {
+        console.error('[Tiger Options] Failed to parse output:', stdout.slice(0, 200));
+        return { ok: false, error: 'Failed to parse response' };
+      }
+    } catch (error: any) {
+      const errorMsg = error.stderr || error.message || String(error);
+      console.error('[Tiger Options] Error:', errorMsg);
 
       return { ok: false, error: errorMsg };
     }

@@ -37,6 +37,12 @@ interface Config {
     lagIntervals: number;
     maxPairs: number;
     expectedMoveThreshold: number;
+    // Options trading parameters
+    optionsStrikeDistancePct: number;   // 行权价距离阈值 (默认 0.05 = 5%)
+    optionsMinOpenInterest: number;     // 最小持仓量 (默认 100)
+    optionsMaxSpreadPct: number;        // 最大 Spread 百分比 (默认 0.10 = 10%)
+    optionsMinDelta: number;            // 最小 Delta (默认 0.30)
+    optionsMaxPremiumPct: number;       // 最大权利金占比 (默认 0.05 = 5%)
   };
   autoTrading: {
     enabled: boolean;
@@ -81,6 +87,12 @@ const defaultConfig: Config = {
     lagIntervals: parseInt(process.env.LAG_INTERVALS || '2', 10),
     maxPairs: parseInt(process.env.MAX_PAIRS || '400', 10),
     expectedMoveThreshold: parseFloat(process.env.EXPECTED_MOVE_THRESHOLD || '0.5'),
+    // Options parameters
+    optionsStrikeDistancePct: parseFloat(process.env.OPTIONS_STRIKE_DISTANCE || '0.05'),
+    optionsMinOpenInterest: parseInt(process.env.OPTIONS_MIN_OI || '100', 10),
+    optionsMaxSpreadPct: parseFloat(process.env.OPTIONS_MAX_SPREAD || '0.10'),
+    optionsMinDelta: parseFloat(process.env.OPTIONS_MIN_DELTA || '0.30'),
+    optionsMaxPremiumPct: parseFloat(process.env.OPTIONS_MAX_PREMIUM || '0.05'),
   },
   autoTrading: {
     enabled: process.env.AUTO_TRADING_ENABLED === 'true',
