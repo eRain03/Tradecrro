@@ -84,7 +84,7 @@ export class UnifiedDataFetcher {
    */
   private restoreVolumeState(): void {
     try {
-      const db = require('./database/connection').getDatabase();
+      const db = require('../database/connection').getDatabase();
       const rows = db.prepare(`
         SELECT symbol, MAX(timestamp) as latest_ts, volume
         FROM price_data
