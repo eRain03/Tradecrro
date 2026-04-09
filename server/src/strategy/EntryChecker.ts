@@ -1,4 +1,5 @@
 import { PairScore } from '../core/scoring/ScoringEngine';
+import config from '../config';
 
 export interface EntryCheckResult {
   canEnter: boolean;
@@ -14,14 +15,18 @@ export interface EntryCheckResult {
  * Validates entry conditions for trading strategies
  *
  * Rules:
- * - Positive Lag: leader ≥5%, lagger <2%, expected move ≥5%
- * - Negative Correlation: strong negative correlation + high volume + expected move ≥5%
+ * - Positive Lag: leader ≥5%, lagger <2%, expected move ≥ threshold
+ * - Negative Correlation: strong negative correlation + high volume + expected move ≥ threshold
  */
 export class EntryChecker {
   private readonly LEADER_MOVE_THRESHOLD = 0.05; // 5%
   private readonly LAGGER_MOVE_THRESHOLD = 0.02; // 2%
-  private readonly EXPECTED_MOVE_THRESHOLD = 0.05; // 5%
   private readonly HIGH_VOLUME_RATIO = 1.5; // 150% of average
+
+  // Expected move threshold from config (percentage, e.g. 0.5 = 0.5%)
+  private get EXPECTED_MOVE_THRESHOLD(): number {
+    return config.trading.expectedMoveThreshold / 100;
+  }
 
   /**
    * Check entry conditions for a trading signal

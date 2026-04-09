@@ -121,8 +121,8 @@ const lossCount = computed(() => {
               <th>Exit</th>
               <th>P&L %</th>
               <th>P&L $</th>
-              <th>Exit Reason</th>
-              <th>Close Time</th>
+              <th>Source</th>
+              <th>Time</th>
             </tr>
           </thead>
           <tbody>
@@ -131,9 +131,11 @@ const lossCount = computed(() => {
                 <span class="symbol-name">{{ trade.stockSymbol }}</span>
               </td>
               <td>
-                <span class="side-badge long">LONG</span>
+                <span class="side-badge" :class="trade.action === 'SELL' ? 'short' : 'long'">
+                  {{ trade.action || 'LONG' }}
+                </span>
               </td>
-              <td class="font-mono">{{ trade.positionSize }}</td>
+              <td class="font-mono">{{ trade.positionSize || trade.quantity || '-' }}</td>
               <td class="font-mono">${{ trade.entryPrice?.toFixed(2) }}</td>
               <td class="font-mono">${{ trade.exitPrice?.toFixed(2) }}</td>
               <td class="font-mono" :class="(trade.pnlPct || 0) > 0 ? 'text-success' : 'text-error'">
@@ -142,7 +144,11 @@ const lossCount = computed(() => {
               <td class="font-mono" :class="(trade.pnlAmount || 0) > 0 ? 'text-success' : 'text-error'">
                 ${{ trade.pnlAmount?.toFixed(2) }}
               </td>
-              <td class="reason-cell">{{ trade.exitReason }}</td>
+              <td>
+                <span class="source-badge" :class="trade.source === 'tiger' ? 'tiger' : 'local'">
+                  {{ trade.source === 'tiger' ? 'TIGER' : 'LOCAL' }}
+                </span>
+              </td>
               <td class="time-cell">{{ formatTime(trade.exitTime || '') }}</td>
             </tr>
           </tbody>
@@ -332,6 +338,31 @@ tr:hover {
   text-transform: uppercase;
   background: #d4edda;
   color: #1a7f37;
+}
+
+.side-badge.short {
+  border-color: #c41e3a;
+  background: #f8d7da;
+  color: #c41e3a;
+}
+
+.source-badge {
+  display: inline-block;
+  padding: 2px 6px;
+  border: 1px solid #8b8b8b;
+  border-radius: 2px;
+  font-size: 0.65em;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  background: #f5f5f5;
+  color: #5a5a5a;
+}
+
+.source-badge.tiger {
+  border-color: #0056b3;
+  background: #d1ecf1;
+  color: #0056b3;
 }
 
 .time-cell {

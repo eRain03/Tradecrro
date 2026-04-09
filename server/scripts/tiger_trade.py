@@ -82,11 +82,12 @@ def _to_int(value: Any, fallback: int = 0) -> int:
 
 # Global trade client singleton
 _trade_client = None
+_config_account = None
 
 
 def _get_trade_client():
     """Initialize Tiger TradeClient (singleton pattern)."""
-    global _trade_client
+    global _trade_client, _config_account
 
     if _trade_client is not None:
         return _trade_client
@@ -116,23 +117,36 @@ def _get_trade_client():
         else:
             _fail(f"Tiger config file not found. Set TIGER_CONFIG_PATH or place config at: {default_paths[0]}")
 
+    # Store the configured account
+    _config_account = client_config.account
     _trade_client = TradeClient(client_config)
     return _trade_client
+
+
+def _get_account():
+    """Get the configured account from config file."""
+    _get_trade_client()  # Ensure client is initialized
+    return _config_account
 
 
 def action_buy(symbol: str, quantity: int) -> dict:
     """Execute market buy order."""
     client = _get_trade_client()
+    account = _get_account()
 
     try:
+        # Get contract for the symbol
+        contract = client.get_contract(symbol)
+        if not contract:
+            _fail(f"Contract not found for symbol: {symbol}")
+
         # Market order: action='BUY', order_type='MKT'
         order = client.create_order(
-            account=client.get_accounts()[0].account if client.get_accounts() else None,
-            symbol=symbol,
-            sec_type='STK',  # Stock
+            account=account,
+            contract=contract,
             action='BUY',
-            quantity=quantity,
             order_type='MKT',  # Market order
+            quantity=quantity,
         )
         result = client.place_order(order)
 
@@ -152,15 +166,19 @@ def action_buy(symbol: str, quantity: int) -> dict:
 def action_sell(symbol: str, quantity: int) -> dict:
     """Execute market sell order."""
     client = _get_trade_client()
+    account = _get_account()
 
     try:
+        contract = client.get_contract(symbol)
+        if not contract:
+            _fail(f"Contract not found for symbol: {symbol}")
+
         order = client.create_order(
-            account=client.get_accounts()[0].account if client.get_accounts() else None,
-            symbol=symbol,
-            sec_type='STK',
+            account=account,
+            contract=contract,
             action='SELL',
-            quantity=quantity,
             order_type='MKT',
+            quantity=quantity,
         )
         result = client.place_order(order)
 
@@ -180,15 +198,19 @@ def action_sell(symbol: str, quantity: int) -> dict:
 def action_limit_buy(symbol: str, quantity: int, price: float) -> dict:
     """Execute limit buy order."""
     client = _get_trade_client()
+    account = _get_account()
 
     try:
+        contract = client.get_contract(symbol)
+        if not contract:
+            _fail(f"Contract not found for symbol: {symbol}")
+
         order = client.create_order(
-            account=client.get_accounts()[0].account if client.get_accounts() else None,
-            symbol=symbol,
-            sec_type='STK',
+            account=account,
+            contract=contract,
             action='BUY',
-            quantity=quantity,
             order_type='LMT',  # Limit order
+            quantity=quantity,
             limit_price=price,
         )
         result = client.place_order(order)
@@ -210,15 +232,19 @@ def action_limit_buy(symbol: str, quantity: int, price: float) -> dict:
 def action_limit_sell(symbol: str, quantity: int, price: float) -> dict:
     """Execute limit sell order."""
     client = _get_trade_client()
+    account = _get_account()
 
     try:
+        contract = client.get_contract(symbol)
+        if not contract:
+            _fail(f"Contract not found for symbol: {symbol}")
+
         order = client.create_order(
-            account=client.get_accounts()[0].account if client.get_accounts() else None,
-            symbol=symbol,
-            sec_type='STK',
+            account=account,
+            contract=contract,
             action='SELL',
-            quantity=quantity,
             order_type='LMT',
+            quantity=quantity,
             limit_price=price,
         )
         result = client.place_order(order)
@@ -247,12 +273,23 @@ def action_positions() -> list[dict]:
 
         if positions is not None:
             for pos in positions:
+                # Symbol is in contract attribute
+                symbol = ""
+                if hasattr(pos, 'contract') and pos.contract:
+                    contract = pos.contract
+                    if hasattr(contract, 'symbol'):
+                        symbol = contract.symbol
+                    elif hasattr(contract, 'local_symbol'):
+                        symbol = contract.local_symbol
+                    else:
+                        symbol = str(contract).split('/')[0] if '/' in str(contract) else str(contract)
+
                 results.append({
-                    "symbol": pos.symbol if hasattr(pos, 'symbol') else str(pos.get('symbol', '')),
-                    "quantity": _to_int(pos.quantity if hasattr(pos, 'quantity') else pos.get('quantity', 0)),
-                    "avgCost": _to_float(pos.average_cost if hasattr(pos, 'average_cost') else pos.get('average_cost', 0)),
-                    "marketValue": _to_float(pos.market_value if hasattr(pos, 'market_value') else pos.get('market_value', 0)),
-                    "unrealizedPnl": _to_float(pos.unrealized_pnl if hasattr(pos, 'unrealized_pnl') else pos.get('unrealized_pnl', 0)),
+                    "symbol": symbol,
+                    "quantity": _to_int(getattr(pos, 'quantity', 0)),
+                    "avgCost": _to_float(getattr(pos, 'average_cost', 0)),
+                    "marketValue": _to_float(getattr(pos, 'market_value', 0)),
+                    "unrealizedPnl": _to_float(getattr(pos, 'unrealized_pnl', 0)),
                 })
 
         return results
@@ -272,14 +309,14 @@ def action_orders() -> list[dict]:
         if orders is not None:
             for order in orders:
                 results.append({
-                    "orderId": order.id if hasattr(order, 'id') else str(order.get('id', '')),
-                    "symbol": order.symbol if hasattr(order, 'symbol') else str(order.get('symbol', '')),
-                    "action": order.action if hasattr(order, 'action') else str(order.get('action', '')),
-                    "quantity": _to_int(order.quantity if hasattr(order, 'quantity') else order.get('quantity', 0)),
-                    "filledQuantity": _to_int(order.filled_quantity if hasattr(order, 'filled_quantity') else order.get('filled_quantity', 0)),
-                    "orderType": order.order_type if hasattr(order, 'order_type') else str(order.get('order_type', '')),
-                    "status": order.status if hasattr(order, 'status') else str(order.get('status', '')),
-                    "limitPrice": _to_float(order.limit_price if hasattr(order, 'limit_price') else order.get('limit_price', 0)),
+                    "orderId": getattr(order, 'id', ''),
+                    "symbol": getattr(order, 'symbol', ''),
+                    "action": getattr(order, 'action', ''),
+                    "quantity": _to_int(getattr(order, 'quantity', 0)),
+                    "filledQuantity": _to_int(getattr(order, 'filled_quantity', 0)),
+                    "orderType": getattr(order, 'order_type', ''),
+                    "status": getattr(order, 'status', ''),
+                    "limitPrice": _to_float(getattr(order, 'limit_price', 0)),
                 })
 
         return results
@@ -307,24 +344,78 @@ def action_cancel(order_id: str) -> dict:
 def action_account() -> dict:
     """Get account info."""
     client = _get_trade_client()
+    account = _get_account()
 
     try:
-        accounts = client.get_accounts()
-        if not accounts:
-            return {"ok": False, "error": "No accounts found"}
+        assets = client.get_assets()
+        if not assets:
+            return {"ok": True, "accountId": account, "cash": 0, "buyingPower": 0}
 
-        account = accounts[0]
-        return {
-            "ok": True,
-            "accountId": account.account if hasattr(account, 'account') else str(account.get('account', '')),
-            "accountType": account.type if hasattr(account, 'type') else str(account.get('type', '')),
-            "netLiquidation": _to_float(account.net_liquidation if hasattr(account, 'net_liquidation') else account.get('net_liquidation', 0)),
-            "cash": _to_float(account.cash if hasattr(account, 'cash') else account.get('cash', 0)),
-            "buyingPower": _to_float(account.buying_power if hasattr(account, 'buying_power') else account.get('buying_power', 0)),
-        }
+        # Find the asset for our account
+        for a in assets:
+            if str(a.account) == str(account):
+                return {
+                    "ok": True,
+                    "accountId": str(account),
+                    "accountType": getattr(a, 'type', ''),
+                    "netLiquidation": _to_float(getattr(a, 'net_liquidation', 0)),
+                    "cash": _to_float(getattr(a, 'cash', 0)),
+                    "buyingPower": _to_float(getattr(a, 'buying_power', 0)),
+                }
+
+        return {"ok": True, "accountId": account, "cash": 0, "buyingPower": 0}
     except Exception as e:
         _check_danger(str(e))
         _fail(f"Get account failed: {e}")
+
+
+def action_filled_orders(days_back: int = 7) -> list[dict]:
+    """Get filled orders (trade history)."""
+    from datetime import datetime, timedelta
+    client = _get_trade_client()
+    account = _get_account()
+
+    try:
+        start_time = (datetime.now() - timedelta(days=days_back)).strftime('%Y-%m-%d %H:%M:%S')
+        end_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+        orders = client.get_filled_orders(
+            account=account,
+            start_time=start_time,
+            end_time=end_time
+        )
+
+        results = []
+        if orders:
+            for o in orders:
+                # Get symbol from contract
+                symbol = ''
+                if hasattr(o, 'contract') and o.contract:
+                    if hasattr(o.contract, 'symbol'):
+                        symbol = o.contract.symbol
+                    elif hasattr(o.contract, 'local_symbol'):
+                        symbol = o.contract.local_symbol
+                    else:
+                        symbol = str(o.contract).split('/')[0] if '/' in str(o.contract) else str(o.contract)
+
+                results.append({
+                    "orderId": str(getattr(o, 'id', '')),
+                    "symbol": symbol,
+                    "action": str(getattr(o, 'action', '')),
+                    "quantity": _to_int(getattr(o, 'quantity', 0)),
+                    "filledQuantity": _to_int(getattr(o, 'filled', 0)),
+                    "avgFillPrice": _to_float(getattr(o, 'avg_fill_price', 0)),
+                    "orderType": str(getattr(o, 'order_type', '')),
+                    "status": str(getattr(o, 'status', '')),
+                    "commission": _to_float(getattr(o, 'commission', 0)),
+                    "realizedPnl": _to_float(getattr(o, 'realized_pnl', 0)),
+                    "tradeTime": datetime.fromtimestamp(getattr(o, 'trade_time', 0) / 1000).isoformat() if getattr(o, 'trade_time', 0) else '',
+                })
+
+        return results
+    except Exception as e:
+        _check_danger(str(e))
+        _fail(f"Get filled orders failed: {e}")
 
 
 def main() -> None:
@@ -378,6 +469,10 @@ def main() -> None:
 
         elif action == "account":
             result = action_account()
+
+        elif action == "filled_orders":
+            days_back = int(sys.argv[2]) if len(sys.argv) > 2 else 7
+            result = action_filled_orders(days_back)
 
         else:
             _fail(f"Unknown action: {action}")

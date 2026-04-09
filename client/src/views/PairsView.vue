@@ -62,6 +62,19 @@ const submitPair = async () => {
     formError.value = error.message || 'Failed to create pair';
   }
 };
+
+const deletePair = async (pairId: number, stockA: string, stockB: string) => {
+  if (!confirm(`Delete pair ${stockA}/${stockB}?`)) {
+    return;
+  }
+
+  try {
+    await api.deletePair(pairId);
+    store.fetchPairs();
+  } catch (error: any) {
+    alert('Failed to delete pair: ' + (error.message || 'Unknown error'));
+  }
+};
 </script>
 
 <template>
@@ -172,6 +185,9 @@ const submitPair = async () => {
             <span class="status-dot"></span>
             {{ pair.isActive ? 'Active' : 'Paused' }}
           </span>
+          <button class="delete-btn" @click="deletePair(pair.id, pair.stockA, pair.stockB)">
+            DELETE
+          </button>
         </div>
       </div>
     </div>
@@ -533,5 +549,24 @@ const submitPair = async () => {
 .status-indicator.active {
   color: #1a7f37;
   font-weight: 700;
+}
+
+.delete-btn {
+  padding: 4px 10px;
+  background: #f8d7da;
+  color: #8b1e2a;
+  border: 1px solid #f5c6cb;
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 0.65em;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.delete-btn:hover {
+  background: #f1b0b7;
+  border-color: #df8d95;
 }
 </style>

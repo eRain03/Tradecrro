@@ -96,6 +96,19 @@ export class TigerTradeClient {
   }
 
   /**
+   * Get filled orders (trade history)
+   */
+  async getFilledOrders(daysBack: number = 7): Promise<any[]> {
+    const result = await this.callPython('filled_orders', String(daysBack));
+
+    if (Array.isArray(result)) {
+      return result;
+    }
+
+    return [];
+  }
+
+  /**
    * Execute market buy order
    */
   async marketBuy(symbol: string, quantity: number): Promise<TradeResult> {

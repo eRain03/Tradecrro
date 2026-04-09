@@ -12,6 +12,9 @@ const saveSuccessKey = ref('');
 const editingMaxPairs = ref(false);
 const maxPairsInput = ref('');
 
+const editingScoreThreshold = ref(false);
+const scoreThresholdInput = ref('');
+
 const editingSamplingInterval = ref(false);
 const samplingIntervalInput = ref('');
 
@@ -21,13 +24,18 @@ const lookbackWindowInput = ref('');
 const editingLagIntervals = ref(false);
 const lagIntervalsInput = ref('');
 
+const editingExpectedMove = ref(false);
+const expectedMoveInput = ref('');
+
 onMounted(async () => {
   try {
     settings.value = await api.getSettings();
     maxPairsInput.value = settings.value.max_pairs || '400';
+    scoreThresholdInput.value = settings.value.score_threshold || '87';
     samplingIntervalInput.value = settings.value.sampling_interval || '30';
     lookbackWindowInput.value = settings.value.lookback_window || '30';
     lagIntervalsInput.value = settings.value.lag_intervals || '2';
+    expectedMoveInput.value = settings.value.expected_move_threshold || '0.5';
   } catch (e) {
     console.error('Failed to load settings');
   } finally {
@@ -63,6 +71,27 @@ const saveMaxPairs = async () => {
   }
   await saveSetting('max_pairs', String(value));
   editingMaxPairs.value = false;
+};
+
+// Score Threshold editing
+const startEditScoreThreshold = () => {
+  editingScoreThreshold.value = true;
+  scoreThresholdInput.value = settings.value.score_threshold || '87';
+};
+
+const cancelEditScoreThreshold = () => {
+  editingScoreThreshold.value = false;
+  scoreThresholdInput.value = settings.value.score_threshold || '87';
+};
+
+const saveScoreThreshold = async () => {
+  const value = parseInt(scoreThresholdInput.value, 10);
+  if (value < 1 || value > 100 || !Number.isFinite(value)) {
+    alert('Please enter a valid number between 1 and 100');
+    return;
+  }
+  await saveSetting('score_threshold', String(value));
+  editingScoreThreshold.value = false;
 };
 
 // Sampling Interval editing
@@ -128,6 +157,27 @@ const saveLagIntervals = async () => {
   editingLagIntervals.value = false;
 };
 
+// Expected Move Threshold editing
+const startEditExpectedMove = () => {
+  editingExpectedMove.value = true;
+  expectedMoveInput.value = settings.value.expected_move_threshold || '0.5';
+};
+
+const cancelEditExpectedMove = () => {
+  editingExpectedMove.value = false;
+  expectedMoveInput.value = settings.value.expected_move_threshold || '0.5';
+};
+
+const saveExpectedMove = async () => {
+  const value = parseFloat(expectedMoveInput.value);
+  if (value < 0.01 || value > 50 || !Number.isFinite(value)) {
+    alert('Please enter a valid number between 0.01 and 50 percent');
+    return;
+  }
+  await saveSetting('expected_move_threshold', String(value));
+  editingExpectedMove.value = false;
+};
+
 // Generic save function
 const saveSetting = async (key: string, value: string) => {
   saving.value = true;
@@ -173,10 +223,26 @@ const saveSetting = async (key: string, value: string) => {
           <div class="setting-row">
             <div class="setting-info">
               <span class="setting-label">Score Threshold</span>
-              <span class="setting-desc">Minimum signal score to trigger</span>
+              <span class="setting-desc">Minimum signal score to trigger (1-100)</span>
             </div>
-            <div class="setting-value">
-              <span class="value-badge">{{ settings.score_threshold || '87' }}</span>
+            <div class="setting-value editable">
+              <template v-if="!editingScoreThreshold">
+                <span class="value-badge">{{ settings.score_threshold || '87' }}</span>
+                <button class="edit-btn" @click="startEditScoreThreshold">EDIT</button>
+              </template>
+              <template v-else>
+                <input
+                  type="number"
+                  v-model.number="scoreThresholdInput"
+                  class="edit-input"
+                  min="1"
+                  max="100"
+                />
+                <button class="save-btn" @click="saveScoreThreshold" :disabled="saving">
+                  {{ saving ? 'SAVING...' : 'SAVE' }}
+                </button>
+                <button class="cancel-btn" @click="cancelEditScoreThreshold">CANCEL</button>
+              </template>
             </div>
           </div>
           <div class="setting-row">
@@ -206,6 +272,36 @@ const saveSetting = async (key: string, value: string) => {
               <span class="value-badge error">{{ settings.stop_loss_pct || '50' }}%</span>
             </div>
           </div>
+          <div class="setting-row">
+            <div class="setting-info">
+              <span class="setting-label">Expected Move Threshold</span>
+              <span class="setting-desc">Minimum volatility to enter trade (0.01-50%)</span>
+            </div>
+            <div class="setting-value editable">
+              <template v-if="!editingExpectedMove">
+                <span class="value-badge">{{ settings.expected_move_threshold || '0.5' }}%</span>
+                <button class="edit-btn" @click="startEditExpectedMove">EDIT</button>
+              </template>
+              <template v-else>
+                <input
+                  type="number"
+                  v-model.number="expectedMoveInput"
+                  class="edit-input"
+                  min="0.01"
+                  max="50"
+                  step="0.1"
+                />
+                <span class="input-unit">%</span>
+                <button class="save-btn" @click="saveExpectedMove" :disabled="saving">
+                  {{ saving ? 'SAVING...' : 'SAVE' }}
+                </button>
+                <button class="cancel-btn" @click="cancelEditExpectedMove">CANCEL</button>
+              </template>
+            </div>
+          </div>
+        </div>
+        <div v-if="saveSuccess && (saveSuccessKey === 'score_threshold' || saveSuccessKey === 'expected_move_threshold')" class="save-success-message">
+          ✓ Settings updated successfully
         </div>
       </div>
 

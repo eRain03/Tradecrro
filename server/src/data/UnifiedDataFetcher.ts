@@ -34,9 +34,13 @@ export interface StockData {
 /**
  * Unified Data Fetcher
  *
- * Uses APIOrchestrator for automatic failover between Tiger and Yahoo.
- * When Tiger is rate-limited or unavailable, automatically switches to Yahoo.
- * When Tiger recovers, automatically switches back.
+ * When DATA_SOURCE=tiger:
+ * - Uses Tiger for real-time quotes only (no historical data fetching to avoid API abuse)
+ * - No Yahoo fallback - if Tiger fails, skip that cycle and retry next time
+ * - History accumulates from real-time quotes over time
+ *
+ * When DATA_SOURCE=yahoo:
+ * - Uses Yahoo Finance for all data (historical and real-time)
  */
 export class UnifiedDataFetcher {
   private yahooClient: YahooFinanceClient;
@@ -64,8 +68,11 @@ export class UnifiedDataFetcher {
       Math.floor((config.trading.lookbackWindow * 60) / config.trading.samplingInterval)
     );
 
-    console.log(`📊 Data Fetcher initialized with source: ${source}`);
-    console.log(`📊 API Orchestrator status: ${apiOrchestrator.isUsingFallback() ? 'Using fallback (Yahoo)' : 'Using primary'}`);
+    if (source === 'tiger') {
+      console.log(`📊 Data Fetcher: Tiger mode (real-time quotes only, no Yahoo fallback)`);
+    } else {
+      console.log(`📊 Data Fetcher: Yahoo mode`);
+    }
   }
 
   /**
@@ -134,6 +141,9 @@ export class UnifiedDataFetcher {
    * Fetch all current prices with automatic failover
    */
   private async fetchAllCurrentPrices(): Promise<void> {
+    // Sync active symbols from database (pairs may have been added/deleted)
+    this.syncSymbolsFromDatabase();
+
     if (this.activeSymbols.size === 0) return;
 
     try {
@@ -158,24 +168,72 @@ export class UnifiedDataFetcher {
   }
 
   /**
-   * Fetch all symbols using orchestrator with failover
+   * Sync active symbols from database pairs
+   * Called before each polling cycle to ensure we track the latest pairs
+   */
+  private syncSymbolsFromDatabase(): void {
+    try {
+      const db = getDatabase();
+      const pairs = db.prepare(`
+        SELECT DISTINCT stock_a, stock_b FROM stock_pairs WHERE is_active = 1
+      `).all() as { stock_a: string; stock_b: string }[];
+
+      const dbSymbols = new Set<string>();
+      for (const pair of pairs) {
+        dbSymbols.add(pair.stock_a);
+        dbSymbols.add(pair.stock_b);
+      }
+
+      // Add new symbols
+      const newSymbols: string[] = [];
+      for (const symbol of dbSymbols) {
+        if (!this.activeSymbols.has(symbol)) {
+          this.activeSymbols.add(symbol);
+          newSymbols.push(symbol);
+        }
+      }
+
+      // Remove symbols that are no longer in any active pair
+      const toRemove: string[] = [];
+      for (const symbol of this.activeSymbols) {
+        if (!dbSymbols.has(symbol)) {
+          toRemove.push(symbol);
+        }
+      }
+      for (const symbol of toRemove) {
+        this.activeSymbols.delete(symbol);
+        this.priceHistory.delete(symbol);
+      }
+
+      // Log changes
+      if (newSymbols.length > 0 || toRemove.length > 0) {
+        console.log(`📊 Symbols synced: +${newSymbols.length} added, -${toRemove.length} removed, total ${this.activeSymbols.size}`);
+        // Fetch historical data for new symbols
+        for (const symbol of newSymbols) {
+          this.fetchHistoricalData(symbol).catch(err => {
+            console.warn(`Failed to fetch historical data for ${symbol}:`, err);
+          });
+        }
+      }
+    } catch (error) {
+      console.error('Failed to sync symbols from database:', error);
+    }
+  }
+
+  /**
+   * Fetch all symbols using Tiger only (no Yahoo fallback)
+   * When DATA_SOURCE=tiger, we only use Tiger for real-time quotes
    */
   private async fetchAllWithOrchestrator(): Promise<Map<string, StockData>> {
     const symbols = Array.from(this.activeSymbols);
     const results = new Map<string, StockData>();
 
-    // Check current source status
-    const status = apiOrchestrator.getStatus();
-    const usingFallback = apiOrchestrator.isUsingFallback();
+    if (symbols.length === 0) return results;
 
-    if (usingFallback) {
-      console.log('📊 Using Yahoo (fallback mode)');
-    }
-
-    // Try Tiger first if available
-    if (this.source === 'tiger' && apiOrchestrator.isTigerAvailable()) {
+    // Tiger only mode - no Yahoo fallback
+    if (this.source === 'tiger') {
       const tigerClient = apiOrchestrator.getTigerClient();
-      if (tigerClient) {
+      if (tigerClient && apiOrchestrator.isTigerAvailable()) {
         try {
           const quotes = await tigerClient.getQuotes(symbols);
 
@@ -192,21 +250,21 @@ export class UnifiedDataFetcher {
             results.set(quote.symbol, data);
           }
 
-          // Record success
-          const tigerStatus = status.tiger;
-          tigerStatus.available = true;
-
+          console.log(`📊 Tiger quotes: ${results.size}/${symbols.length} symbols`);
           return results;
         } catch (error: any) {
-          console.error('Tiger API error in batch fetch:', error.message?.slice(0, 100));
-
-          // Let orchestrator handle the error and potential failover
-          // Fall through to Yahoo
+          console.error(`❌ Tiger API batch fetch failed: ${error.message?.slice(0, 100)}`);
+          // No fallback - just return empty results and retry next cycle
+          return results;
         }
+      } else {
+        // Tiger unavailable (rate limit pause or blacklist)
+        console.warn('⚠️ Tiger API temporarily unavailable, skipping this cycle');
+        return results;
       }
     }
 
-    // Use Yahoo as fallback
+    // Yahoo mode (when DATA_SOURCE=yahoo)
     console.log('📊 Fetching from Yahoo Finance...');
     for (const symbol of symbols) {
       try {
@@ -233,15 +291,15 @@ export class UnifiedDataFetcher {
   }
 
   /**
-   * Fetch current price
+   * Fetch current price (single symbol - used for dynamic symbol additions)
    */
   private async fetchCurrentPrice(symbol: string): Promise<void> {
     try {
       let data: StockData;
 
-      // Use orchestrator to determine source
-      if (this.source === 'tiger' && apiOrchestrator.isTigerAvailable()) {
-        data = await this.fetchFromTigerWithFailover(symbol);
+      // Tiger only mode
+      if (this.source === 'tiger') {
+        data = await this.fetchFromTigerOnly(symbol);
       } else {
         data = await this.fetchFromYahoo(symbol);
       }
@@ -258,41 +316,26 @@ export class UnifiedDataFetcher {
   }
 
   /**
-   * Fetch from Tiger with automatic failover to Yahoo
+   * Fetch from Tiger (no Yahoo fallback)
    */
-  private async fetchFromTigerWithFailover(symbol: string): Promise<StockData> {
+  private async fetchFromTigerOnly(symbol: string): Promise<StockData> {
     const tigerClient = apiOrchestrator.getTigerClient();
 
     if (!tigerClient || !apiOrchestrator.isTigerAvailable()) {
-      // Fall back to Yahoo
-      console.log(`📊 Tiger unavailable, fetching ${symbol} from Yahoo`);
-      return this.fetchFromYahoo(symbol);
+      throw new Error(`Tiger unavailable for ${symbol} - no fallback`);
     }
 
-    try {
-      const quote = await tigerClient.getQuote(symbol);
+    const quote = await tigerClient.getQuote(symbol);
 
-      return {
-        symbol,
-        timestamp: quote.timestamp,
-        price: quote.price,
-        bid: quote.bid,
-        ask: quote.ask,
-        volume: quote.volume,
-        source: 'tiger',
-      };
-    } catch (error: any) {
-      // Check if should failover
-      const errorMsg = error.message?.toLowerCase() || '';
-      if (errorMsg.includes('rate limit') ||
-          errorMsg.includes('blacklist') ||
-          errorMsg.includes('disabled') ||
-          errorMsg.includes('paused')) {
-        console.log(`⚠️ Tiger error for ${symbol}, falling back to Yahoo: ${error.message?.slice(0, 50)}`);
-        return this.fetchFromYahoo(symbol);
-      }
-      throw error;
-    }
+    return {
+      symbol,
+      timestamp: quote.timestamp,
+      price: quote.price,
+      bid: quote.bid,
+      ask: quote.ask,
+      volume: quote.volume,
+      source: 'tiger',
+    };
   }
 
   /**
@@ -428,61 +471,42 @@ export class UnifiedDataFetcher {
 
   /**
    * Fetch historical data
+   *
+   * Uses Yahoo for historical data initialization (free, no rate limits).
+   * Tiger is only used for real-time quotes during polling.
+   *
+   * This prevents Tiger API abuse while ensuring signals have enough data to start.
    */
   private async fetchHistoricalData(symbol: string): Promise<void> {
     try {
-      // Try Tiger first, then Yahoo
-      if (this.source === 'tiger' && apiOrchestrator.isTigerAvailable()) {
-        const tigerClient = apiOrchestrator.getTigerClient();
-        if (tigerClient) {
-          try {
-            const historical = await tigerClient.getHistoricalData(symbol, '1d', '1m');
-            const validHistorical = historical.filter(h => h.close > 0 && Number.isFinite(h.close));
-
-            if (validHistorical.length > 0) {
-              const stockData: StockData[] = validHistorical.map((h) => ({
-                symbol,
-                timestamp: h.date,
-                price: h.close,
-                bid: h.low,
-                ask: h.high,
-                volume: this.toFinite(h.volume),
-                source: 'tiger' as const,
-              }));
-
-              this.priceHistory.set(symbol, stockData.slice(-(this.lookbackPoints + 1)));
-              for (const data of stockData.slice(-(this.lookbackPoints + 1))) {
-                this.saveToDatabase(data);
-              }
-              console.log(`📊 Loaded ${Math.min(stockData.length, this.lookbackPoints + 1)} historical prices for ${symbol} (Tiger)`);
-              return;
-            }
-          } catch (error: any) {
-            console.log(`⚠️ Tiger historical data failed for ${symbol}: ${error.message?.slice(0, 50)}`);
-          }
-        }
-      }
-
-      // Fallback to Yahoo
+      // Always use Yahoo for historical data - free, no rate limits
       const historical = await this.yahooClient.getHistoricalData(symbol, '1d', '1m');
       const validHistorical = historical.filter(h => h.close > 0 && Number.isFinite(h.close));
 
-      const stockData: StockData[] = validHistorical.map((h) => ({
-        symbol,
-        timestamp: h.date,
-        price: h.close,
-        bid: h.low,
-        ask: h.high,
-        volume: this.toFinite(h.volume),
-        source: 'yahoo' as const,
-      }));
+      if (validHistorical.length > 0) {
+        const stockData: StockData[] = validHistorical.map((h) => ({
+          symbol,
+          timestamp: h.date,
+          price: h.close,
+          bid: h.low,
+          ask: h.high,
+          volume: this.toFinite(h.volume),
+          source: 'yahoo' as const,  // Historical data from Yahoo
+        }));
 
-      this.priceHistory.set(symbol, stockData.slice(-(this.lookbackPoints + 1)));
-      for (const data of stockData.slice(-(this.lookbackPoints + 1))) {
-        this.saveToDatabase(data);
+        this.priceHistory.set(symbol, stockData.slice(-(this.lookbackPoints + 1)));
+        for (const data of stockData.slice(-(this.lookbackPoints + 1))) {
+          this.saveToDatabase(data);
+        }
+        console.log(`📊 Loaded ${Math.min(stockData.length, this.lookbackPoints + 1)} historical prices for ${symbol} (Yahoo init)`);
+      } else {
+        // No valid data, start with empty history
+        this.priceHistory.set(symbol, []);
+        console.log(`📊 No historical data for ${symbol}, will accumulate from real-time quotes`);
       }
-      console.log(`📊 Loaded ${Math.min(stockData.length, this.lookbackPoints + 1)} historical prices for ${symbol} (Yahoo)`);
     } catch (error) {
+      // Failed to get historical data, start empty
+      this.priceHistory.set(symbol, []);
       console.error(`Failed to fetch historical data for ${symbol}:`, error);
     }
   }

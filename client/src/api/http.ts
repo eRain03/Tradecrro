@@ -144,6 +144,12 @@ class ApiClient {
     });
   }
 
+  async deletePair(pairId: number): Promise<{ success: boolean }> {
+    return this.fetch(`/api/pairs/${pairId}`, {
+      method: 'DELETE',
+    });
+  }
+
   // Signals
   async getSignals(limit: number = 100): Promise<Signal[]> {
     return this.fetch(`/api/signals?limit=${limit}`);

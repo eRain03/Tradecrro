@@ -178,6 +178,13 @@ export class AIPairMiner {
 
   public start() {
     if (this.isRunning) return;
+
+    // Check if AI mining is paused
+    if (config.aiMining.paused) {
+      console.log('[AIPairMiner] ⏸️ AI挖掘已暂停 (AI_MINING_PAUSED=true)');
+      return;
+    }
+
     this.isRunning = true;
     console.log('[AIPairMiner] 启动后台 AI 交易对挖掘引擎...');
 

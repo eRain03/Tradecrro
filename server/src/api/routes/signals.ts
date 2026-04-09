@@ -9,8 +9,8 @@ router.get('/', (req, res) => {
     const limit = parseInt(req.query.limit as string) || 1000;
     const db = getDatabase();
 
-    // Get the latest signal for each pair using a subquery
-    // This ensures we have one signal per pair (matching the pairs being monitored)
+    // Get the latest signal for each ACTIVE pair only
+    // This ensures signals match the pairs being monitored
     const signals = db.prepare(`
       SELECT s.id, s.timestamp,
              s.correlation_sync as syncCorrelation,
@@ -31,9 +31,10 @@ router.get('/', (req, res) => {
              p.stock_a as stockA, p.stock_b as stockB
       FROM signals s
       JOIN stock_pairs p ON s.pair_id = p.id
-      WHERE s.id IN (
-        SELECT MAX(id) FROM signals GROUP BY pair_id
-      )
+      WHERE p.is_active = 1
+        AND s.id IN (
+          SELECT MAX(id) FROM signals GROUP BY pair_id
+        )
       ORDER BY s.total_score DESC, s.timestamp DESC
       LIMIT ?
     `).all(limit);

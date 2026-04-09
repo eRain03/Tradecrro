@@ -134,9 +134,12 @@ export class TigerAutoTrader {
           trades.push(trade);
         }
       } else if (signal.strategyType === 'negative_corr') {
-        // Negative Correlation Strategy: Could buy both or hedge
-        // For now, we'll just log and not execute (more complex strategy)
-        console.log(`📊 [AutoTrader] Negative correlation signal - skipping (requires manual handling)`);
+        // Negative Correlation Strategy: Buy the cheaper/lower-priced stock
+        // For pairs like SPY/SH or QQQ/PSQ, buy the inverse ETF (SH, PSQ) for hedging
+        const trade = await this.executeNegativeCorrTrade(signal);
+        if (trade) {
+          trades.push(trade);
+        }
       }
     } catch (error: any) {
       console.error(`❌ [AutoTrader] Failed to process signal: ${error.message}`);
@@ -200,6 +203,84 @@ export class TigerAutoTrader {
         trade.status = 'filled';
         trade.orderId = result.orderId;
         console.log(`✅ [AutoTrader] BOUGHT ${symbol} x ${quantity} @ $${price.toFixed(2)}`);
+        console.log(`   Order ID: ${result.orderId}`);
+      } else {
+        trade.status = 'failed';
+        console.error(`❌ [AutoTrader] Failed to buy ${symbol}: ${result.error}`);
+        return null;
+      }
+    }
+
+    // Save to database
+    trade.id = this.saveTrade(trade);
+
+    // Track active trade
+    this.activeTrades.set(symbol, trade);
+
+    // Start monitoring
+    this.startMonitoring(trade, signal);
+
+    return trade;
+  }
+
+  /**
+   * Execute trade for negative correlation strategy
+   * For pairs like SPY/SH or QQQ/PSQ, buy the inverse ETF (stockB)
+   */
+  private async executeNegativeCorrTrade(signal: TradingSignal): Promise<TradeExecution | null> {
+    // For negative correlation pairs, buy stockB (usually the inverse ETF)
+    // e.g., SPY/SH -> buy SH, QQQ/PSQ -> buy PSQ
+    const symbol = signal.stockB;
+    const hedgeSymbol = signal.stockA;
+
+    // Check if we already have a position
+    if (this.activeTrades.has(symbol)) {
+      console.log(`⚠️ [AutoTrader] Already have active trade for ${symbol}, skipping`);
+      return null;
+    }
+
+    // Check existing position
+    const existingQty = await this.tradeClient.getPositionQuantity(symbol);
+    if (existingQty > 0) {
+      console.log(`⚠️ [AutoTrader] Already have position in ${symbol} (${existingQty} shares), skipping`);
+      return null;
+    }
+
+    // Get current price
+    const quote = await this.quoteClient.getQuote(symbol);
+    const price = quote.price;
+
+    // Calculate position size
+    const quantity = this.calculatePositionSize(price);
+
+    if (quantity <= 0) {
+      console.log(`⚠️ [AutoTrader] Invalid position size for ${symbol}`);
+      return null;
+    }
+
+    // Create trade record
+    const trade: TradeExecution = {
+      signalId: signal.id!,
+      symbol,
+      action: 'BUY',
+      quantity,
+      entryPrice: price,
+      status: 'pending',
+      entryTime: new Date(),
+    };
+
+    // Execute trade
+    if (this.config.dryRun) {
+      console.log(`🧪 [DRY RUN] Would BUY ${symbol} (hedge vs ${hedgeSymbol}) x ${quantity} @ $${price.toFixed(2)}`);
+      trade.status = 'filled';
+      trade.orderId = 'DRY_RUN';
+    } else {
+      const result = await this.tradeClient.marketBuy(symbol, quantity);
+
+      if (result.ok) {
+        trade.status = 'filled';
+        trade.orderId = result.orderId;
+        console.log(`✅ [AutoTrader] BOUGHT ${symbol} (hedge vs ${hedgeSymbol}) x ${quantity} @ $${price.toFixed(2)}`);
         console.log(`   Order ID: ${result.orderId}`);
       } else {
         trade.status = 'failed';

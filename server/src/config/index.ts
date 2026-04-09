@@ -36,12 +36,16 @@ interface Config {
     lookbackWindow: number;
     lagIntervals: number;
     maxPairs: number;
+    expectedMoveThreshold: number;
   };
   autoTrading: {
     enabled: boolean;
     dryRun: boolean;
     maxPositionSize: number;
     maxPositionValue: number;
+  };
+  aiMining: {
+    paused: boolean;
   };
 }
 
@@ -76,12 +80,16 @@ const defaultConfig: Config = {
     lookbackWindow: parseInt(process.env.LOOKBACK_WINDOW || '30', 10),
     lagIntervals: parseInt(process.env.LAG_INTERVALS || '2', 10),
     maxPairs: parseInt(process.env.MAX_PAIRS || '400', 10),
+    expectedMoveThreshold: parseFloat(process.env.EXPECTED_MOVE_THRESHOLD || '0.5'),
   },
   autoTrading: {
     enabled: process.env.AUTO_TRADING_ENABLED === 'true',
     dryRun: process.env.AUTO_TRADING_DRY_RUN !== 'false',
     maxPositionSize: parseInt(process.env.MAX_POSITION_SIZE || '100', 10),
     maxPositionValue: parseInt(process.env.MAX_POSITION_VALUE || '10000', 10),
+  },
+  aiMining: {
+    paused: process.env.AI_MINING_PAUSED === 'true',
   },
 };
 
@@ -133,6 +141,10 @@ function loadSettingsFromDatabase(): void {
         case 'lag_intervals':
           config.trading.lagIntervals = parseInt(row.value, 10) || config.trading.lagIntervals;
           console.log(`📊 Loaded lag_intervals from database: ${config.trading.lagIntervals}`);
+          break;
+        case 'expected_move_threshold':
+          config.trading.expectedMoveThreshold = parseFloat(row.value) || config.trading.expectedMoveThreshold;
+          console.log(`📊 Loaded expected_move_threshold from database: ${config.trading.expectedMoveThreshold}%`);
           break;
       }
     }

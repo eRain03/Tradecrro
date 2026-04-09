@@ -54,4 +54,26 @@ router.post('/', (req, res) => {
   }
 });
 
+// Delete a pair (soft delete by setting is_active = 0)
+router.delete('/:id', (req, res) => {
+  try {
+    const { id } = req.params;
+    const db = getDatabase();
+
+    // Check if pair exists
+    const pair = db.prepare('SELECT id FROM stock_pairs WHERE id = ?').get(id);
+    if (!pair) {
+      return res.status(404).json({ error: 'Pair not found' });
+    }
+
+    // Soft delete (set is_active = 0)
+    db.prepare('UPDATE stock_pairs SET is_active = 0 WHERE id = ?').run(id);
+
+    res.json({ success: true, message: 'Pair deleted' });
+  } catch (error) {
+    console.error('Failed to delete pair:', error);
+    res.status(500).json({ error: 'Failed to delete pair' });
+  }
+});
+
 export default router;
