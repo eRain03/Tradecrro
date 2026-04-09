@@ -123,11 +123,16 @@ app.listen(PORT, () => {
   // Start data fetching after server is ready
   startDataFetching();
 
-  // Start AI Pair Miner with pair limit and liquidity cleanup
+  // Start AI Pair Miner immediately
   const miner = new AIPairMiner(dataFetcher);
   miner.trimPairsToLimit();
-  miner.cleanupLowLiquidityPairs().then(() => {
-    miner.start();
+
+  // Start mining immediately, cleanup runs in background
+  miner.start();
+
+  // Run liquidity cleanup in background (non-blocking)
+  miner.cleanupLowLiquidityPairs().catch(err => {
+    console.warn('[AIPairMiner] Liquidity cleanup error:', err.message);
   });
 
   // Export miner for settings updates

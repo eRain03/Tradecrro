@@ -181,10 +181,8 @@ export class AIPairMiner {
     this.isRunning = true;
     console.log('[AIPairMiner] 启动后台 AI 交易对挖掘引擎...');
 
-    // Initial run after 5 seconds
-    this.timer = setTimeout(() => {
-      this.runMinerCycle();
-    }, 5 * 1000);
+    // Run immediately on startup
+    this.runMinerCycle();
   }
 
   public stop() {
