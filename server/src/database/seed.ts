@@ -16,9 +16,9 @@ export function seedData(): void {
 
   console.log('🌱 Seeding database...');
 
-  // Insert default settings
+  // Insert default settings only if not exists (preserve user settings)
   const insertSetting = db.prepare(`
-    INSERT OR REPLACE INTO settings (key, value, updated_at)
+    INSERT OR IGNORE INTO settings (key, value, updated_at)
     VALUES (?, ?, CURRENT_TIMESTAMP)
   `);
 
@@ -38,7 +38,7 @@ export function seedData(): void {
     insertSetting.run(key, value);
   }
 
-  console.log('✅ Default settings inserted');
+  console.log('✅ Default settings ensured (preserved existing values)');
 
   // Use the built-in US stock universe
   console.log('⚠️ Using built-in US stock pairs...');
