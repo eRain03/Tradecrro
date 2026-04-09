@@ -73,12 +73,15 @@ export interface Trade {
   entryPrice: number;
   exitPrice?: number;
   positionSize: number;
+  quantity?: number;
   entryTime: string;
   exitTime?: string;
   pnlPct?: number;
   pnlAmount?: number;
   status: string;
   exitReason?: string;
+  action?: string;
+  source?: string;
 }
 
 class ApiClient {

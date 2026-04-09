@@ -34,7 +34,7 @@ export interface OptionContract {
   openInterest: number;        // 持仓量
 
   // 正股价格
-  underlyingPrice: number;     // 正股当前价格
+  underlyingPrice?: number;     // 正股当前价格 (可选，由调用者传入)
 }
 
 export interface ContractScore {

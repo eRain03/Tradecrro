@@ -126,13 +126,7 @@ def action_chain(symbol: str) -> List[Dict]:
     Get option chain for a symbol.
     Returns list of option contracts with key data.
     """
-    client = _get_option_client()
-    account = _get_account()
-
     try:
-        # Get option chain using Tiger API
-        # Note: Tiger API may use different method names
-        # This is a placeholder - actual API may differ
         from tigeropen.quote.quote_client import QuoteClient
         from tigeropen.tiger_open_client import TigerOpenClientConfig
 
@@ -147,28 +141,38 @@ def action_chain(symbol: str) -> List[Dict]:
         # Get option expiration dates first
         expirations = quote_client.get_option_expirations(symbol)
 
-        if not expirations:
+        if expirations is None or (hasattr(expirations, '__len__') and len(expirations) == 0):
             print(json.dumps([]))
             return []
 
-        # Get option chain for nearest expiration
-        nearest_exp = expirations[0] if expirations else None
+        # Get the nearest expiration date (it's a DataFrame)
+        if hasattr(expirations, 'iloc'):
+            # pandas DataFrame
+            nearest_exp = expirations.iloc[0]['date']
+        else:
+            nearest_exp = expirations[0] if expirations else None
 
         if not nearest_exp:
             print(json.dumps([]))
             return []
 
-        # Get option chain
+        print(f"[DEBUG] Getting option chain for {symbol}, expiry: {nearest_exp}", file=sys.stderr)
+
+        # Get option chain - need to pass expiry as a date object or string
         chain = quote_client.get_option_chain(symbol, nearest_exp)
+
+        if chain is None:
+            print(json.dumps([]))
+            return []
 
         results = []
         for opt in chain:
             results.append({
+                "symbol": symbol,
                 "contractSymbol": getattr(opt, 'symbol', ''),
-                "underlying": symbol,
                 "strike": _to_float(getattr(opt, 'strike', 0)),
                 "expiration": str(getattr(opt, 'expiry', '')),
-                "optionType": "CALL" if 'C' in getattr(opt, 'symbol', '') else "PUT",
+                "optionType": "CALL" if 'C' in str(getattr(opt, 'symbol', '')) else "PUT",
                 "bid": _to_float(getattr(opt, 'bid', 0)),
                 "ask": _to_float(getattr(opt, 'ask', 0)),
                 "lastPrice": _to_float(getattr(opt, 'latest_price', 0)),
@@ -186,7 +190,7 @@ def action_chain(symbol: str) -> List[Dict]:
 
     except Exception as e:
         _check_danger(str(e))
-        # Return empty array on error
+        print(f"[ERROR] Failed to get option chain: {e}", file=sys.stderr)
         print(json.dumps([]))
         return []
 

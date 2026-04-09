@@ -52,10 +52,10 @@ export interface AccountInfo {
 }
 
 export interface OptionContract {
-  contractSymbol: string;
-  underlying: string;
+  symbol: string;                  // 正股代码
+  contractSymbol: string;          // 期权合约代码
   strike: number;
-  expiration: string;
+  expiration: Date;                // 到期日
   optionType: 'CALL' | 'PUT';
   bid: number;
   ask: number;
@@ -67,6 +67,7 @@ export interface OptionContract {
   theta: number;
   vega: number;
   impliedVolatility: number;
+  underlyingPrice?: number;        // 正股当前价格 (可选)
 }
 
 export class TigerTradeClient {
@@ -179,7 +180,11 @@ export class TigerTradeClient {
     const result = await this.callOptionsPython('chain', symbol);
 
     if (Array.isArray(result)) {
-      return result as OptionContract[];
+      // Transform expiration string to Date
+      return result.map((opt: any) => ({
+        ...opt,
+        expiration: new Date(opt.expiration),
+      })) as OptionContract[];
     }
 
     return [];
@@ -192,7 +197,23 @@ export class TigerTradeClient {
     const result = await this.callOptionsPython('quote', contractSymbol);
 
     if (result && result.contractSymbol) {
-      return result as OptionContract;
+      return {
+        symbol: result.symbol || contractSymbol.split(/[0-9]/)[0],
+        contractSymbol: result.contractSymbol,
+        strike: result.strike || 0,
+        expiration: new Date(result.expiration || 0),
+        optionType: result.optionType || 'CALL',
+        bid: result.bid || 0,
+        ask: result.ask || 0,
+        lastPrice: result.lastPrice || 0,
+        volume: result.volume || 0,
+        openInterest: result.openInterest || 0,
+        delta: result.delta || 0,
+        gamma: result.gamma || 0,
+        theta: result.theta || 0,
+        vega: result.vega || 0,
+        impliedVolatility: result.impliedVolatility || 0,
+      } as OptionContract;
     }
 
     return null;

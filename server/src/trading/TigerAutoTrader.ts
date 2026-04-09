@@ -123,20 +123,20 @@ export class TigerAutoTrader {
       return trades;
     }
 
+    // Only process positive_lag strategy (stock trading)
+    // negative_corr strategy should be handled by options trader
+    if (signal.strategyType !== 'positive_lag') {
+      console.log(`⏭️ [AutoTrader] Skipping ${signal.strategyType} signal (handled by options trader)`);
+      return trades;
+    }
+
     console.log(`🚀 [AutoTrader] Processing signal #${signal.id}: ${signal.stockA}/${signal.stockB}`);
     console.log(`   Strategy: ${signal.strategyType}, Leader: ${signal.score.leader}, Lagger: ${signal.score.lagger}`);
 
     try {
-      if (signal.strategyType === 'positive_lag' && signal.score.lagger) {
+      if (signal.score.lagger) {
         // Positive Lag Strategy: Buy the lagger
         const trade = await this.executeLaggerTrade(signal);
-        if (trade) {
-          trades.push(trade);
-        }
-      } else if (signal.strategyType === 'negative_corr') {
-        // Negative Correlation Strategy: Buy the cheaper/lower-priced stock
-        // For pairs like SPY/SH or QQQ/PSQ, buy the inverse ETF (SH, PSQ) for hedging
-        const trade = await this.executeNegativeCorrTrade(signal);
         if (trade) {
           trades.push(trade);
         }

@@ -136,23 +136,21 @@ export class OptionsTrader {
       return null;
     }
 
+    // Only process negative_corr strategy (options trading)
+    // positive_lag strategy is handled by stock trader
+    if (signal.strategyType !== 'negative_corr') {
+      console.log(`⏭️ [OptionsTrader] Skipping ${signal.strategyType} signal (handled by stock trader)`);
+      return null;
+    }
+
     console.log('');
     console.log('🚀 [OptionsTrader] Processing signal #' + signal.id);
     console.log(`   Pair: ${signal.stockA}/${signal.stockB}`);
     console.log(`   Strategy: ${signal.strategyType}`);
 
     try {
-      // 第一阶段：策略路由
-      if (signal.strategyType === 'positive_lag' && signal.score.lagger) {
-        // 路由 A：单腿执行 - 仅锁定 Lagger
-        return await this.executeSingleLegTrade(signal);
-      } else if (signal.strategyType === 'negative_corr') {
-        // 路由 B：双腿执行 - 同时锁定 A 和 B
-        return await this.executeDoubleLegTrade(signal);
-      } else {
-        console.log('⚠️ [OptionsTrader] Unknown strategy type, skipping');
-        return null;
-      }
+      // 双腿执行 - 同时锁定 A 和 B
+      return await this.executeDoubleLegTrade(signal);
     } catch (error: any) {
       console.error(`❌ [OptionsTrader] Failed to process signal: ${error.message}`);
       return null;
@@ -337,18 +335,19 @@ export class OptionsTrader {
 
   /**
    * 获取期权链
-   * TODO: 实现 Tiger API 期权链获取
+   * 通过 TigerTradeClient 调用 Tiger Open API
    */
   private async getOptionChain(symbol: string): Promise<OptionContract[]> {
-    // 暂时返回空数组，需要实现 Tiger API 调用
-    // Tiger Open API 支持 get_option_chain 或类似接口
-
     console.log(`[OptionsTrader] Fetching option chain for ${symbol}...`);
 
-    // 这里需要调用 Tiger Python 脚本或 Tiger Open API
-    // 返回格式化的 OptionContract 数组
-
-    return [];
+    try {
+      const chain = await this.tradeClient.getOptionChain(symbol);
+      console.log(`[OptionsTrader] Got ${chain.length} contracts for ${symbol}`);
+      return chain;
+    } catch (error: any) {
+      console.error(`[OptionsTrader] Failed to get option chain for ${symbol}: ${error.message}`);
+      return [];
+    }
   }
 
   /**
@@ -508,7 +507,23 @@ export class OptionsTrader {
   }> {
     const result: { legA?: number; legB?: number } = {};
 
-    // TODO: 调用 Tiger API 获取期权当前 BID 价
+    try {
+      if (trade.legA) {
+        const quote = await this.tradeClient.getOptionQuote(trade.legA.contractSymbol);
+        if (quote) {
+          result.legA = quote.bid;
+        }
+      }
+
+      if (trade.legB) {
+        const quote = await this.tradeClient.getOptionQuote(trade.legB.contractSymbol);
+        if (quote) {
+          result.legB = quote.bid;
+        }
+      }
+    } catch (error: any) {
+      console.error(`[OptionsTrader] Failed to get current bids: ${error.message}`);
+    }
 
     return result;
   }
@@ -533,7 +548,48 @@ export class OptionsTrader {
 
     // 执行平仓
     if (!this.config.dryRun) {
-      // TODO: 调用 Tiger API 发送 Sell to Close 订单
+      // Sell to close for each leg
+      if (trade.legA && currentBids.legA) {
+        try {
+          const result = await this.tradeClient.limitSellOption(
+            trade.legA.contractSymbol,
+            trade.legA.quantity,
+            currentBids.legA
+          );
+          if (result.ok) {
+            console.log(`✅ [OptionsTrader] Sold Leg A: ${trade.legA.contractSymbol} @ $${currentBids.legA.toFixed(2)}`);
+          } else {
+            console.error(`❌ [OptionsTrader] Failed to sell Leg A: ${result.error}`);
+          }
+        } catch (error: any) {
+          console.error(`❌ [OptionsTrader] Leg A sell exception: ${error.message}`);
+        }
+      }
+
+      if (trade.legB && currentBids.legB) {
+        try {
+          const result = await this.tradeClient.limitSellOption(
+            trade.legB.contractSymbol,
+            trade.legB.quantity,
+            currentBids.legB
+          );
+          if (result.ok) {
+            console.log(`✅ [OptionsTrader] Sold Leg B: ${trade.legB.contractSymbol} @ $${currentBids.legB.toFixed(2)}`);
+          } else {
+            console.error(`❌ [OptionsTrader] Failed to sell Leg B: ${result.error}`);
+          }
+        } catch (error: any) {
+          console.error(`❌ [OptionsTrader] Leg B sell exception: ${error.message}`);
+        }
+      }
+    } else {
+      // Dry run log
+      if (trade.legA && currentBids.legA) {
+        console.log(`🧪 [DRY RUN] Sell Leg A: ${trade.legA.contractSymbol} x ${trade.legA.quantity} @ $${currentBids.legA.toFixed(2)}`);
+      }
+      if (trade.legB && currentBids.legB) {
+        console.log(`🧪 [DRY RUN] Sell Leg B: ${trade.legB.contractSymbol} x ${trade.legB.quantity} @ $${currentBids.legB.toFixed(2)}`);
+      }
     }
 
     // 计算最终盈亏

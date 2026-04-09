@@ -83,27 +83,21 @@ export class SignalGenerator {
       this.lookbackPoints
     );
 
-    // Calculate average volumes
-    const volumesA = historyA
-      .slice(-(this.lookbackPoints + 1), -1)
-      .map(h => h.volume)
-      .filter(v => Number.isFinite(v) && v >= 0);
-    const volumesB = historyB
-      .slice(-(this.lookbackPoints + 1), -1)
-      .map(h => h.volume)
-      .filter(v => Number.isFinite(v) && v >= 0);
-    const avgVolumeA = volumesA.reduce((a, b) => a + b, 0) / volumesA.length || 1;
-    const avgVolumeB = volumesB.reduce((a, b) => a + b, 0) / volumesB.length || 1;
+    // Get incremental volumes from Tiger (NOT from Yahoo history)
+    const currentVolumeA = this.dataService.getCurrentIncrementalVolume(stockA);
+    const avgVolumeA = this.dataService.getAverageIncrementalVolume(stockA);
+    const currentVolumeB = this.dataService.getCurrentIncrementalVolume(stockB);
+    const avgVolumeB = this.dataService.getAverageIncrementalVolume(stockB);
 
-    // Calculate score
+    // Calculate score (using Tiger incremental volumes)
     const score = this.scoringEngine.calculatePairScore(
       stockA,
       stockB,
       returnsA,
       returnsB,
-      latestA.volume,
+      currentVolumeA,
       avgVolumeA,
-      latestB.volume,
+      currentVolumeB,
       avgVolumeB
     );
 

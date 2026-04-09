@@ -22,9 +22,16 @@ const updateMarketStatus = () => {
   const utcMin = now.getUTCMinutes();
   const day = now.getUTCDay();
 
-  // Forex/Stock market: main trading hours Mon-Fri 8:00-17:00 UTC
+  // US Stock Market: Mon-Fri 9:30 AM - 4:00 PM ET
+  // During daylight saving time (Mar-Nov): UTC 13:30 - 20:00
+  // During standard time (Nov-Mar): UTC 14:30 - 21:00
+  // We'll use daylight saving time as default
   const isWeekday = day >= 1 && day <= 5;
-  marketOpen.value = isWeekday && (utcHour >= 8 && utcHour < 17);
+  const marketOpenUTC = 13 * 60 + 30; // 13:30 UTC in minutes
+  const marketCloseUTC = 20 * 60; // 20:00 UTC in minutes
+  const currentUTC = utcHour * 60 + utcMin;
+
+  marketOpen.value = isWeekday && (currentUTC >= marketOpenUTC && currentUTC < marketCloseUTC);
 
   const hours = String(utcHour).padStart(2, '0');
   const minutes = String(utcMin).padStart(2, '0');
@@ -33,17 +40,25 @@ const updateMarketStatus = () => {
   // Calculate next open time
   if (!marketOpen.value) {
     let nextOpen = new Date(now);
+    const todayOpenUTC = new Date(now);
+    todayOpenUTC.setUTCHours(13, 30, 0, 0);
+
     if (day === 0) {
-      // Sunday - next Monday 8:00 UTC
+      // Sunday - next Monday 13:30 UTC
       nextOpen.setUTCDate(nextOpen.getUTCDate() + 1);
+      nextOpen.setUTCHours(13, 30, 0, 0);
     } else if (day === 6) {
-      // Saturday - next Monday 8:00 UTC
+      // Saturday - next Monday 13:30 UTC
       nextOpen.setUTCDate(nextOpen.getUTCDate() + 2);
-    } else if (utcHour >= 17) {
-      // After market close - next day 8:00 UTC
+      nextOpen.setUTCHours(13, 30, 0, 0);
+    } else if (currentUTC >= marketCloseUTC) {
+      // After market close - next day 13:30 UTC
       nextOpen.setUTCDate(nextOpen.getUTCDate() + 1);
+      nextOpen.setUTCHours(13, 30, 0, 0);
+    } else if (currentUTC < marketOpenUTC) {
+      // Before market open today
+      nextOpen = todayOpenUTC;
     }
-    nextOpen.setUTCHours(8, 0, 0, 0);
 
     const diff = nextOpen.getTime() - now.getTime();
     const diffHours = Math.floor(diff / (1000 * 60 * 60));
@@ -235,7 +250,7 @@ const getEntryLogicText = (signal: any) => {
 
     <div class="scan-info" v-if="store.signals.length > 0">
       <span class="scan-label">Latest Scan:</span>
-      <span class="scan-time">{{ formatTime(store.signals[0]?.timestamp) }}</span>
+      <span class="scan-time">{{ store.signals[0]?.timestamp ? formatTime(store.signals[0].timestamp) : '-' }}</span>
       <span class="scan-note">• Showing latest signal for each trading pair</span>
     </div>
 

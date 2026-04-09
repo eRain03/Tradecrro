@@ -7,7 +7,8 @@ import { seedData } from './database/seed';
 import UnifiedDataFetcher from './data/UnifiedDataFetcher';
 import SignalGenerator from './strategy/SignalGenerator';
 import { AIPairMiner } from './core/ai/AIPairMiner';
-import { getAutoTrader } from './api/routes/autoTrading';
+import { getAutoTrader, getOptionsTrader } from './api/routes/autoTrading';
+import OptionsTrader from './trading/OptionsTrader';
 
 // Import routes
 import pairsRoutes from './api/routes/pairs';
@@ -67,6 +68,18 @@ const autoTrader = getAutoTrader({
   maxPositionValue: config.autoTrading.maxPositionValue,
 });
 
+// Initialize options trader (disabled by default)
+const optionsTrader = getOptionsTrader({
+  enabled: false,
+  dryRun: true,
+  maxCapitalPct: config.trading.maxPositionPct,
+  takeProfitPct: config.trading.takeProfitPct,
+  stopLossPct: config.trading.stopLossPct,
+});
+
+// Export traders for API access
+(global as any).__optionsTrader = optionsTrader;
+
 // Start data fetching
 async function startDataFetching() {
   try {
@@ -96,7 +109,11 @@ async function startDataFetching() {
           // Process triggered signals through auto trader
           for (const signal of triggeredSignals) {
             if (signal.entryConfirmed) {
+              // Stock trader handles positive_lag
               await autoTrader.processSignal(signal);
+
+              // Options trader handles negative_corr
+              await optionsTrader.processSignal(signal);
             }
           }
         } catch (error) {

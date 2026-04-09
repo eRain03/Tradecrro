@@ -46,7 +46,8 @@ export class UnifiedDataFetcher {
   private yahooClient: YahooFinanceClient;
   private source: DataSource;
   private priceHistory: Map<string, StockData[]> = new Map();
-  private lastCumulativeVolume: Map<string, { volume: number; dateKey: string }> = new Map();
+  private lastCumulativeVolume: Map<string, { volume: number; timestamp: Date }> = new Map();
+  private incrementalVolumeHistory: Map<string, number[]> = new Map();
   private isRunning: boolean = false;
   private intervalId: NodeJS.Timeout | null = null;
   private readonly lookbackPoints: number;
@@ -68,10 +69,40 @@ export class UnifiedDataFetcher {
       Math.floor((config.trading.lookbackWindow * 60) / config.trading.samplingInterval)
     );
 
+    // Restore volume state from database
+    this.restoreVolumeState();
+
     if (source === 'tiger') {
       console.log(`📊 Data Fetcher: Tiger mode (real-time quotes only, no Yahoo fallback)`);
     } else {
       console.log(`📊 Data Fetcher: Yahoo mode`);
+    }
+  }
+
+  /**
+   * Restore volume state from database on startup
+   */
+  private restoreVolumeState(): void {
+    try {
+      const db = require('./database/connection').getDatabase();
+      const rows = db.prepare(`
+        SELECT symbol, MAX(timestamp) as latest_ts, volume
+        FROM price_data
+        GROUP BY symbol
+      `).all() as { symbol: string; latest_ts: string; volume: number }[];
+
+      for (const row of rows) {
+        if (row.volume > 1000000) {
+          // Likely a cumulative volume (> 1M)
+          this.lastCumulativeVolume.set(row.symbol, {
+            volume: row.volume,
+            timestamp: new Date(row.latest_ts)
+          });
+          console.log(`📊 Restored cumulative volume for ${row.symbol}: ${row.volume}`);
+        }
+      }
+    } catch (error) {
+      console.warn('Failed to restore volume state:', error);
     }
   }
 
@@ -349,8 +380,11 @@ export class UnifiedDataFetcher {
 
     let normalizedVolume = 0;
 
-    if (lastVolumeState && lastVolumeState.dateKey === dateKey) {
-      normalizedVolume = Math.max(quote.volume - lastVolumeState.volume, 0);
+    if (lastVolumeState) {
+      const lastDateKey = lastVolumeState.timestamp.toISOString().slice(0, 10);
+      if (lastDateKey === dateKey) {
+        normalizedVolume = Math.max(quote.volume - lastVolumeState.volume, 0);
+      }
     } else if (history.length > 0) {
       const recentVolumes = history
         .slice(-Math.min(this.lookbackPoints, history.length))
@@ -362,7 +396,7 @@ export class UnifiedDataFetcher {
       }
     }
 
-    this.lastCumulativeVolume.set(symbol, { volume: quote.volume, dateKey });
+    this.lastCumulativeVolume.set(symbol, { volume: quote.volume, timestamp: quote.timestamp });
 
     return {
       symbol,
@@ -377,6 +411,7 @@ export class UnifiedDataFetcher {
 
   /**
    * Fetch from Tiger API
+   * Uses ONLY Tiger data for volume calculation (no Yahoo)
    */
   private async fetchFromTiger(symbol: string): Promise<StockData> {
     const tigerClient = apiOrchestrator.getTigerClient();
@@ -385,6 +420,34 @@ export class UnifiedDataFetcher {
     }
 
     const quote = await tigerClient.getQuote(symbol);
+    const currentCumulative = quote.volume;
+
+    // Calculate incremental volume
+    let incrementalVolume = 0;
+    const lastState = this.lastCumulativeVolume.get(symbol);
+
+    if (lastState) {
+      // Calculate increment since last update
+      incrementalVolume = Math.max(currentCumulative - lastState.volume, 0);
+    }
+    // If no last state, incremental is 0 (first data point)
+
+    // Update last cumulative volume
+    this.lastCumulativeVolume.set(symbol, {
+      volume: currentCumulative,
+      timestamp: quote.timestamp
+    });
+
+    // Store incremental volume history for this symbol
+    let history = this.incrementalVolumeHistory.get(symbol) || [];
+    if (incrementalVolume > 0) {
+      history.push(incrementalVolume);
+      // Keep last 60 increments (about 30 minutes at 30s interval)
+      if (history.length > 60) {
+        history = history.slice(-60);
+      }
+      this.incrementalVolumeHistory.set(symbol, history);
+    }
 
     return {
       symbol,
@@ -392,7 +455,7 @@ export class UnifiedDataFetcher {
       price: quote.price,
       bid: quote.bid,
       ask: quote.ask,
-      volume: quote.volume,
+      volume: incrementalVolume,
       source: 'tiger',
     };
   }
@@ -573,6 +636,24 @@ export class UnifiedDataFetcher {
   getLatestPrice(symbol: string): StockData | null {
     const history = this.priceHistory.get(symbol);
     return history && history.length > 0 ? history[history.length - 1] : null;
+  }
+
+  /**
+   * Get average incremental volume for a symbol
+   * Used for volume score calculation
+   */
+  getAverageIncrementalVolume(symbol: string): number {
+    const history = this.incrementalVolumeHistory.get(symbol) || [];
+    if (history.length === 0) return 1; // Default to 1 to avoid division by zero
+    return history.reduce((sum, v) => sum + v, 0) / history.length;
+  }
+
+  /**
+   * Get current incremental volume for a symbol (most recent)
+   */
+  getCurrentIncrementalVolume(symbol: string): number {
+    const history = this.incrementalVolumeHistory.get(symbol) || [];
+    return history.length > 0 ? history[history.length - 1] : 0;
   }
 
   /**

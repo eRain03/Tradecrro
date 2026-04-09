@@ -14,6 +14,18 @@ interface AutoTradingStatus {
   };
 }
 
+interface OptionsTradingStatus {
+  enabled: boolean;
+  dryRun: boolean;
+  activeTrades: number;
+  trades: OptionsTrade[];
+  config: {
+    maxCapitalPct: number;
+    takeProfitPct: number;
+    stopLossPct: number;
+  };
+}
+
 interface Trade {
   id: number;
   signalId: number;
@@ -28,6 +40,33 @@ interface Trade {
   pnlPct?: number;
   pnlAmount?: number;
   status: string;
+  exitReason?: string;
+}
+
+interface OptionsTrade {
+  id: number;
+  signalId: number;
+  strategyType: 'positive_lag' | 'negative_corr';
+  legA?: {
+    underlyingSymbol: string;
+    contractSymbol: string;
+    quantity: number;
+    entryAsk: number;
+    status: string;
+  };
+  legB?: {
+    underlyingSymbol: string;
+    contractSymbol: string;
+    quantity: number;
+    entryAsk: number;
+    status: string;
+  };
+  allocatedCapital: number;
+  status: string;
+  entryTime: string;
+  exitTime?: string;
+  pnlPct?: number;
+  pnlAmount?: number;
   exitReason?: string;
 }
 
@@ -70,14 +109,33 @@ interface APIStatus {
   };
 }
 
+interface OptionContract {
+  symbol: string;
+  contractSymbol: string;
+  strike: number;
+  expiration: string;
+  optionType: string;
+  bid: number;
+  ask: number;
+  delta: number;
+  volume: number;
+  openInterest: number;
+}
+
 const status = ref<AutoTradingStatus | null>(null);
+const optionsStatus = ref<OptionsTradingStatus | null>(null);
 const apiStatus = ref<APIStatus | null>(null);
 const positions = ref<Position[]>([]);
 const orders = ref<Order[]>([]);
 const history = ref<Trade[]>([]);
+const optionsTrades = ref<OptionsTrade[]>([]);
+const optionChain = ref<OptionContract[]>([]);
+const optionChainSymbol = ref('');
 const loading = ref(false);
+const optionsLoading = ref(false);
 const testResult = ref<string | null>(null);
 const testLoading = ref(false);
+const chainLoading = ref(false);
 
 let refreshInterval: ReturnType<typeof setInterval>;
 
@@ -128,6 +186,41 @@ const fetchHistory = async () => {
     history.value = data.trades || [];
   } catch (e) {
     console.error('Failed to fetch history:', e);
+  }
+};
+
+const fetchOptionsStatus = async () => {
+  try {
+    const res = await fetch('/api/auto-trading/options-status');
+    optionsStatus.value = await res.json();
+  } catch (e) {
+    console.error('Failed to fetch options status:', e);
+  }
+};
+
+const fetchOptionsTrades = async () => {
+  try {
+    const res = await fetch('/api/auto-trading/options-trades');
+    const data = await res.json();
+    optionsTrades.value = data.trades || [];
+  } catch (e) {
+    console.error('Failed to fetch options trades:', e);
+  }
+};
+
+const fetchOptionChain = async () => {
+  if (!optionChainSymbol.value.trim()) return;
+
+  chainLoading.value = true;
+  try {
+    const res = await fetch(`/api/auto-trading/option-chain/${optionChainSymbol.value.trim().toUpperCase()}`);
+    const data = await res.json();
+    optionChain.value = data.contracts || [];
+  } catch (e) {
+    console.error('Failed to fetch option chain:', e);
+    optionChain.value = [];
+  } finally {
+    chainLoading.value = false;
   }
 };
 
@@ -184,6 +277,42 @@ const closeAllTrades = async () => {
   }
 };
 
+const enableOptionsTrading = async (dryRun: boolean) => {
+  optionsLoading.value = true;
+  try {
+    const res = await fetch('/api/auto-trading/options-enable', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dryRun }),
+    });
+    const data = await res.json();
+    if (data.success) {
+      await fetchOptionsStatus();
+    }
+  } catch (e) {
+    console.error('Failed to enable options trading:', e);
+  } finally {
+    optionsLoading.value = false;
+  }
+};
+
+const disableOptionsTrading = async () => {
+  optionsLoading.value = true;
+  try {
+    const res = await fetch('/api/auto-trading/options-disable', {
+      method: 'POST',
+    });
+    const data = await res.json();
+    if (data.success) {
+      await fetchOptionsStatus();
+    }
+  } catch (e) {
+    console.error('Failed to disable options trading:', e);
+  } finally {
+    optionsLoading.value = false;
+  }
+};
+
 const testOrder = async () => {
   testLoading.value = true;
   testResult.value = null;
@@ -228,13 +357,17 @@ const getPnlClass = (pnl?: number) => {
 
 onMounted(() => {
   fetchStatus();
+  fetchOptionsStatus();
   fetchAPIStatus();
   fetchHistory();
+  fetchOptionsTrades();
 
   refreshInterval = setInterval(() => {
     fetchStatus();
+    fetchOptionsStatus();
     fetchAPIStatus();
     fetchHistory();
+    fetchOptionsTrades();
   }, 10000);
 });
 
@@ -386,6 +519,152 @@ onUnmounted(() => {
         <div v-if="testResult" class="test-result" :class="testResult.includes('✅') ? 'success' : 'error'">
           {{ testResult }}
         </div>
+      </div>
+    </div>
+
+    <!-- Options Trading Card -->
+    <div class="card options-card">
+      <div class="card-header">
+        <h2>📊 Options Trading</h2>
+        <div class="status-badges">
+          <span class="badge" :class="optionsStatus?.enabled ? 'enabled' : 'disabled'">
+            {{ optionsStatus?.enabled ? '✅ Enabled' : '⏹️ Disabled' }}
+          </span>
+          <span class="badge" :class="optionsStatus?.dryRun ? 'dry-run' : 'live'">
+            {{ optionsStatus?.dryRun ? '🧪 Simulation' : '⚠️ LIVE' }}
+          </span>
+        </div>
+      </div>
+
+      <div class="status-content">
+        <div class="status-item">
+          <span class="label">Active Options Trades</span>
+          <span class="value">{{ optionsStatus?.activeTrades || 0 }}</span>
+        </div>
+        <div class="status-item">
+          <span class="label">Max Capital %</span>
+          <span class="value">{{ optionsStatus?.config?.maxCapitalPct || 10 }}%</span>
+        </div>
+        <div class="status-item">
+          <span class="label">Take Profit</span>
+          <span class="value positive">+{{ optionsStatus?.config?.takeProfitPct || 200 }}%</span>
+        </div>
+        <div class="status-item">
+          <span class="label">Stop Loss</span>
+          <span class="value negative">-{{ optionsStatus?.config?.stopLossPct || 50 }}%</span>
+        </div>
+      </div>
+
+      <div class="action-buttons">
+        <button
+          class="btn btn-success"
+          @click="enableOptionsTrading(true)"
+          :disabled="optionsLoading || optionsStatus?.enabled"
+        >
+          🧪 Enable Options (Simulation)
+        </button>
+        <button
+          class="btn btn-warning"
+          @click="enableOptionsTrading(false)"
+          :disabled="optionsLoading || optionsStatus?.enabled"
+        >
+          ⚠️ Enable Options (LIVE)
+        </button>
+        <button
+          class="btn btn-danger"
+          @click="disableOptionsTrading"
+          :disabled="optionsLoading || !optionsStatus?.enabled"
+        >
+          🛑 Disable Options
+        </button>
+      </div>
+    </div>
+
+    <!-- Option Chain Lookup -->
+    <div class="card chain-card">
+      <div class="card-header">
+        <h2>🔍 Option Chain Lookup</h2>
+      </div>
+      <div class="chain-content">
+        <div class="chain-input">
+          <input
+            type="text"
+            v-model="optionChainSymbol"
+            placeholder="Enter symbol (e.g., AAPL)"
+            class="symbol-input"
+          />
+          <button class="btn btn-primary" @click="fetchOptionChain" :disabled="chainLoading">
+            {{ chainLoading ? 'Loading...' : '🔍 Lookup' }}
+          </button>
+        </div>
+        <div v-if="optionChain.length > 0" class="chain-results">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Contract</th>
+                <th>Strike</th>
+                <th>Type</th>
+                <th>Bid</th>
+                <th>Ask</th>
+                <th>Delta</th>
+                <th>Volume</th>
+                <th>OI</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="opt in optionChain.slice(0, 20)" :key="opt.contractSymbol">
+                <td class="mono">{{ opt.contractSymbol }}</td>
+                <td>${{ opt.strike }}</td>
+                <td :class="opt.optionType === 'CALL' ? 'buy' : 'sell'">{{ opt.optionType }}</td>
+                <td>${{ opt.bid?.toFixed(2) || '-' }}</td>
+                <td>${{ opt.ask?.toFixed(2) || '-' }}</td>
+                <td>{{ opt.delta?.toFixed(2) || '-' }}</td>
+                <td>{{ opt.volume || 0 }}</td>
+                <td>{{ opt.openInterest || 0 }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div v-else-if="optionChainSymbol && !chainLoading" class="empty-state">
+          No option contracts found
+        </div>
+      </div>
+    </div>
+
+    <!-- Active Options Trades -->
+    <div class="card" v-if="optionsTrades && optionsTrades.length > 0">
+      <div class="card-header">
+        <h2>📈 Active Options Trades</h2>
+      </div>
+      <div class="table-container">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Strategy</th>
+              <th>Leg A Contract</th>
+              <th>Leg A Qty</th>
+              <th>Leg B Contract</th>
+              <th>Leg B Qty</th>
+              <th>Capital</th>
+              <th>Entry Time</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="trade in optionsTrades" :key="trade.id">
+              <td>{{ trade.strategyType }}</td>
+              <td class="mono">{{ trade.legA?.contractSymbol || '-' }}</td>
+              <td>{{ trade.legA?.quantity || '-' }}</td>
+              <td class="mono">{{ trade.legB?.contractSymbol || '-' }}</td>
+              <td>{{ trade.legB?.quantity || '-' }}</td>
+              <td>${{ trade.allocatedCapital?.toFixed(2) }}</td>
+              <td>{{ formatTime(trade.entryTime) }}</td>
+              <td>
+                <span class="status-badge" :class="trade.status">{{ trade.status }}</span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
       </div>
     </div>
 
@@ -849,5 +1128,40 @@ onUnmounted(() => {
   padding: 40px;
   text-align: center;
   color: #999;
+}
+
+.options-card {
+  border-left: 4px solid #6c5ce7;
+}
+
+.chain-card .chain-content {
+  padding: 20px;
+}
+
+.chain-input {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.symbol-input {
+  padding: 10px 16px;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  font-size: 0.9em;
+  width: 200px;
+}
+
+.symbol-input:focus {
+  border-color: #0056b3;
+  outline: none;
+}
+
+.chain-results {
+  overflow-x: auto;
+}
+
+.chain-card .data-table td.mono {
+  font-size: 0.75em;
 }
 </style>

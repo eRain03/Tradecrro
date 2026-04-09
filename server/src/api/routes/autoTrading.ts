@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import TigerAutoTrader, { AutoTradeConfig } from '../../trading/TigerAutoTrader';
 import TigerTradeClient from '../../trading/TigerTradeClient';
+import OptionsTrader, { OptionsTradeConfig, OptionsTradeExecution } from '../../trading/OptionsTrader';
 import apiOrchestrator from '../../data/APIOrchestrator';
 import config from '../../config';
 
@@ -9,6 +10,7 @@ const router = Router();
 // Singleton instances
 let autoTrader: TigerAutoTrader | null = null;
 let tradeClient: TigerTradeClient | null = null;
+let optionsTrader: OptionsTrader | null = null;
 
 /**
  * Get or create auto trader instance
@@ -28,6 +30,16 @@ function getTradeClient(): TigerTradeClient {
     tradeClient = new TigerTradeClient();
   }
   return tradeClient;
+}
+
+/**
+ * Get or create options trader instance
+ */
+export function getOptionsTrader(configOverride?: Partial<OptionsTradeConfig>): OptionsTrader {
+  if (!optionsTrader) {
+    optionsTrader = new OptionsTrader(configOverride);
+  }
+  return optionsTrader;
 }
 
 /**
@@ -276,6 +288,257 @@ router.get('/history', (req, res) => {
     });
   } catch (error) {
     res.status(500).json({ error: 'Failed to get trade history' });
+  }
+});
+
+// ============ Options Trading Routes ============
+
+/**
+ * Get options trading status
+ */
+router.get('/options-status', (req, res) => {
+  try {
+    const trader = getOptionsTrader();
+    const activeTrades = trader.getActiveTrades();
+
+    res.json({
+      enabled: trader['config'].enabled,
+      dryRun: trader['config'].dryRun,
+      activeTrades: activeTrades.length,
+      trades: activeTrades,
+      config: {
+        maxCapitalPct: trader['config'].maxCapitalPct,
+        takeProfitPct: trader['config'].takeProfitPct,
+        stopLossPct: trader['config'].stopLossPct,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to get options trading status' });
+  }
+});
+
+/**
+ * Enable options trading
+ */
+router.post('/options-enable', (req, res) => {
+  try {
+    const { dryRun } = req.body;
+    const trader = getOptionsTrader();
+
+    if (dryRun !== undefined) {
+      trader['config'].dryRun = dryRun;
+    }
+
+    trader.enable();
+
+    res.json({
+      success: true,
+      enabled: true,
+      dryRun: trader['config'].dryRun,
+      message: 'Options trading enabled',
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to enable options trading' });
+  }
+});
+
+/**
+ * Disable options trading
+ */
+router.post('/options-disable', (req, res) => {
+  try {
+    const trader = getOptionsTrader();
+    trader.disable();
+
+    res.json({
+      success: true,
+      enabled: false,
+      message: 'Options trading disabled',
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to disable options trading' });
+  }
+});
+
+/**
+ * Update options trading configuration
+ */
+router.post('/options-config', (req, res) => {
+  try {
+    const trader = getOptionsTrader();
+    const { maxCapitalPct, takeProfitPct, stopLossPct, dryRun } = req.body;
+
+    if (maxCapitalPct !== undefined) {
+      trader['config'].maxCapitalPct = Number(maxCapitalPct);
+    }
+    if (takeProfitPct !== undefined) {
+      trader['config'].takeProfitPct = Number(takeProfitPct);
+    }
+    if (stopLossPct !== undefined) {
+      trader['config'].stopLossPct = Number(stopLossPct);
+    }
+    if (dryRun !== undefined) {
+      trader['config'].dryRun = Boolean(dryRun);
+    }
+
+    res.json({
+      success: true,
+      config: trader['config'],
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to update options config' });
+  }
+});
+
+/**
+ * Get options active trades
+ */
+router.get('/options-trades', (req, res) => {
+  try {
+    const trader = getOptionsTrader();
+    const trades = trader.getActiveTrades();
+
+    res.json({
+      trades,
+      count: trades.length,
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to get options trades' });
+  }
+});
+
+/**
+ * Get option chain for a symbol
+ */
+router.get('/option-chain/:symbol', async (req, res) => {
+  try {
+    const client = getTradeClient();
+    const symbol = req.params.symbol.toUpperCase();
+    const chain = await client.getOptionChain(symbol);
+
+    res.json({
+      symbol,
+      contracts: chain,
+      count: chain.length,
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * Test stock trade execution (simulate signal)
+ */
+router.post('/stock-test', async (req, res) => {
+  try {
+    const {
+      symbolA = 'NVDA',
+      symbolB = 'AMD',
+      strategyType = 'positive_lag',
+      leader = 'NVDA',
+      lagger = 'AMD'
+    } = req.body;
+
+    const trader = getAutoTrader();
+
+    // Create a mock signal
+    const mockSignal: any = {
+      id: 999999,
+      stockA: symbolA,
+      stockB: symbolB,
+      strategyType,
+      triggered: true,
+      entryConfirmed: true,
+      score: {
+        leader,
+        lagger,
+        totalScore: 90,
+        syncCorrelation: 0.85,
+        lagCorrelation: 0.75,
+      },
+    };
+
+    console.log('');
+    console.log('='.repeat(60));
+    console.log('🧪 [TEST] Simulating STOCK trade execution');
+    console.log('='.repeat(60));
+    console.log(`   Symbol A: ${symbolA}`);
+    console.log(`   Symbol B: ${symbolB}`);
+    console.log(`   Strategy: ${strategyType}`);
+    console.log(`   Leader: ${leader}`);
+    console.log(`   Lagger: ${lagger}`);
+    console.log('='.repeat(60));
+
+    const results = await trader.processSignal(mockSignal);
+
+    if (results && results.length > 0) {
+      res.json({
+        success: true,
+        trades: results,
+        message: 'Stock trade executed successfully',
+      });
+    } else {
+      res.json({
+        success: false,
+        message: 'Trade not executed (check server logs for details)',
+      });
+    }
+  } catch (error: any) {
+    console.error('[TEST] Error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * Test options trade execution (simulate signal)
+ */
+router.post('/options-test', async (req, res) => {
+  try {
+    const { symbolA = 'SPY', symbolB = 'SH', strategyType = 'negative_corr' } = req.body;
+
+    const trader = getOptionsTrader();
+
+    // Create a mock signal
+    const mockSignal: any = {
+      id: 999999,
+      stockA: symbolA,
+      stockB: symbolB,
+      strategyType,
+      triggered: true,
+      entryConfirmed: true,
+      score: {
+        leader: symbolA,
+        lagger: symbolB,
+        totalScore: 85,
+      },
+    };
+
+    console.log('');
+    console.log('='.repeat(60));
+    console.log('🧪 [TEST] Simulating options trade execution');
+    console.log('='.repeat(60));
+    console.log(`   Symbol A: ${symbolA}`);
+    console.log(`   Symbol B: ${symbolB}`);
+    console.log(`   Strategy: ${strategyType}`);
+    console.log('='.repeat(60));
+
+    const result = await trader.processSignal(mockSignal);
+
+    if (result) {
+      res.json({
+        success: true,
+        trade: result,
+        message: 'Options trade executed successfully',
+      });
+    } else {
+      res.json({
+        success: false,
+        message: 'Trade not executed (check server logs for details)',
+      });
+    }
+  } catch (error: any) {
+    console.error('[TEST] Error:', error);
+    res.status(500).json({ error: error.message });
   }
 });
 
