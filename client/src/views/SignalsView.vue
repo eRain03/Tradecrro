@@ -1,10 +1,14 @@
 <script setup lang="ts">
-import { onMounted, computed, ref, onUnmounted } from 'vue';
+import { onMounted, computed, ref, onUnmounted, watch } from 'vue';
 import { useTradingStore } from '../stores/trading';
 
 const store = useTradingStore();
 
-// Signal limit for fetching
+// Pagination settings
+const PAGE_SIZE = 50;
+const currentPage = ref(1);
+
+// Signal limit for fetching (increased to support pagination)
 const signalLimit = ref(500);
 
 // Market status
@@ -86,6 +90,31 @@ const filteredSignals = computed(() => {
     return store.signals.filter(s => s.triggered);
   }
   return store.signals;
+});
+
+// Paginated signals
+const totalPages = computed(() =>
+  Math.max(1, Math.ceil(filteredSignals.value.length / PAGE_SIZE))
+);
+
+const paginatedSignals = computed(() => {
+  const list = filteredSignals.value;
+  const start = (currentPage.value - 1) * PAGE_SIZE;
+  return list.slice(start, start + PAGE_SIZE);
+});
+
+// Pagination navigation
+const goToPage = (page: number) => {
+  if (page < 1 || page > totalPages.value) return;
+  currentPage.value = page;
+};
+
+const goToPrevPage = () => goToPage(currentPage.value - 1);
+const goToNextPage = () => goToPage(currentPage.value + 1);
+
+// Reset to page 1 when filter changes
+watch(showTriggeredOnly, () => {
+  currentPage.value = 1;
 });
 
 // Get correlation type label
@@ -216,6 +245,11 @@ const getEntryLogicText = (signal: any) => {
     </div>
 
     <div v-else-if="filteredSignals.length > 0" class="signals-table-container">
+      <div class="table-header">
+        <span class="table-info">
+          Page {{ currentPage }}/{{ totalPages }} · Showing {{ paginatedSignals.length }} of {{ filteredSignals.length }} signals
+        </span>
+      </div>
       <table>
         <thead>
           <tr>
@@ -231,7 +265,7 @@ const getEntryLogicText = (signal: any) => {
         </thead>
         <tbody>
           <tr
-            v-for="signal in filteredSignals"
+            v-for="signal in paginatedSignals"
             :key="signal.id"
             class="signal-row"
             :class="{ 'triggered-row': signal.triggered, 'clickable': signal.triggered }"
@@ -276,6 +310,27 @@ const getEntryLogicText = (signal: any) => {
           </tr>
         </tbody>
       </table>
+
+      <!-- Pagination -->
+      <div v-if="filteredSignals.length > PAGE_SIZE" class="pagination-bar">
+        <button
+          type="button"
+          class="page-btn"
+          :disabled="currentPage <= 1"
+          @click="goToPrevPage"
+        >
+          Previous
+        </button>
+        <span class="page-info">{{ currentPage }} / {{ totalPages }}</span>
+        <button
+          type="button"
+          class="page-btn"
+          :disabled="currentPage >= totalPages"
+          @click="goToNextPage"
+        >
+          Next
+        </button>
+      </div>
     </div>
 
     <div v-else class="empty-state">
@@ -621,6 +676,58 @@ export default {
   background: #ffffff;
   border: 1px solid #c4c4c4;
   box-shadow: 2px 2px 4px rgba(0,0,0,0.04);
+}
+
+.table-header {
+  padding: 10px 14px;
+  background: #f8f9fa;
+  border-bottom: 1px solid #e9ecef;
+}
+
+.table-info {
+  font-size: 0.75em;
+  color: #5a5a5a;
+  font-weight: 600;
+}
+
+.pagination-bar {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 16px;
+  padding: 16px;
+  background: #f8f9fa;
+  border-top: 1px solid #e9ecef;
+}
+
+.page-btn {
+  padding: 8px 16px;
+  background: #ffffff;
+  border: 1px solid #c4c4c4;
+  cursor: pointer;
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 0.75em;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: #5a5a5a;
+  transition: all 0.2s ease;
+}
+
+.page-btn:hover:not(:disabled) {
+  border-color: #c41e3a;
+  color: #c41e3a;
+}
+
+.page-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.page-info {
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 0.85em;
+  font-weight: 700;
+  color: #1a1a1a;
 }
 
 table {

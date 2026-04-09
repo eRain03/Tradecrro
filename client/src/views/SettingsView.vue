@@ -4,15 +4,30 @@ import api from '../api/http';
 
 const settings = ref<Record<string, string>>({});
 const loading = ref(true);
-const editingMaxPairs = ref(false);
-const maxPairsInput = ref('');
 const saving = ref(false);
 const saveSuccess = ref(false);
+const saveSuccessKey = ref('');
+
+// Edit states for each editable setting
+const editingMaxPairs = ref(false);
+const maxPairsInput = ref('');
+
+const editingSamplingInterval = ref(false);
+const samplingIntervalInput = ref('');
+
+const editingLookbackWindow = ref(false);
+const lookbackWindowInput = ref('');
+
+const editingLagIntervals = ref(false);
+const lagIntervalsInput = ref('');
 
 onMounted(async () => {
   try {
     settings.value = await api.getSettings();
     maxPairsInput.value = settings.value.max_pairs || '400';
+    samplingIntervalInput.value = settings.value.sampling_interval || '30';
+    lookbackWindowInput.value = settings.value.lookback_window || '30';
+    lagIntervalsInput.value = settings.value.lag_intervals || '2';
   } catch (e) {
     console.error('Failed to load settings');
   } finally {
@@ -20,6 +35,16 @@ onMounted(async () => {
   }
 });
 
+const showSaveSuccess = (key: string) => {
+  saveSuccess.value = true;
+  saveSuccessKey.value = key;
+  setTimeout(() => {
+    saveSuccess.value = false;
+    saveSuccessKey.value = '';
+  }, 2000);
+};
+
+// Max Pairs editing
 const startEditMaxPairs = () => {
   editingMaxPairs.value = true;
   maxPairsInput.value = settings.value.max_pairs || '400';
@@ -36,21 +61,84 @@ const saveMaxPairs = async () => {
     alert('Please enter a valid number between 1 and 10000');
     return;
   }
+  await saveSetting('max_pairs', String(value));
+  editingMaxPairs.value = false;
+};
 
+// Sampling Interval editing
+const startEditSamplingInterval = () => {
+  editingSamplingInterval.value = true;
+  samplingIntervalInput.value = settings.value.sampling_interval || '30';
+};
+
+const cancelEditSamplingInterval = () => {
+  editingSamplingInterval.value = false;
+  samplingIntervalInput.value = settings.value.sampling_interval || '30';
+};
+
+const saveSamplingInterval = async () => {
+  const value = parseInt(samplingIntervalInput.value, 10);
+  if (value < 5 || value > 300 || !Number.isFinite(value)) {
+    alert('Please enter a valid number between 5 and 300 seconds');
+    return;
+  }
+  await saveSetting('sampling_interval', String(value));
+  editingSamplingInterval.value = false;
+};
+
+// Lookback Window editing
+const startEditLookbackWindow = () => {
+  editingLookbackWindow.value = true;
+  lookbackWindowInput.value = settings.value.lookback_window || '30';
+};
+
+const cancelEditLookbackWindow = () => {
+  editingLookbackWindow.value = false;
+  lookbackWindowInput.value = settings.value.lookback_window || '30';
+};
+
+const saveLookbackWindow = async () => {
+  const value = parseInt(lookbackWindowInput.value, 10);
+  if (value < 5 || value > 240 || !Number.isFinite(value)) {
+    alert('Please enter a valid number between 5 and 240 minutes');
+    return;
+  }
+  await saveSetting('lookback_window', String(value));
+  editingLookbackWindow.value = false;
+};
+
+// Lag Intervals editing
+const startEditLagIntervals = () => {
+  editingLagIntervals.value = true;
+  lagIntervalsInput.value = settings.value.lag_intervals || '2';
+};
+
+const cancelEditLagIntervals = () => {
+  editingLagIntervals.value = false;
+  lagIntervalsInput.value = settings.value.lag_intervals || '2';
+};
+
+const saveLagIntervals = async () => {
+  const value = parseInt(lagIntervalsInput.value, 10);
+  if (value < 1 || value > 20 || !Number.isFinite(value)) {
+    alert('Please enter a valid number between 1 and 20 intervals');
+    return;
+  }
+  await saveSetting('lag_intervals', String(value));
+  editingLagIntervals.value = false;
+};
+
+// Generic save function
+const saveSetting = async (key: string, value: string) => {
   saving.value = true;
   try {
-    await api.updateSetting('max_pairs', String(value));
-    settings.value.max_pairs = String(value);
-    settings.value.current_pair_count = settings.value.current_pair_count || '0';
-    editingMaxPairs.value = false;
-    saveSuccess.value = true;
-    setTimeout(() => {
-      saveSuccess.value = false;
-    }, 2000);
-    // Refresh settings to get updated pair count
+    await api.updateSetting(key, value);
+    settings.value[key] = value;
+    showSaveSuccess(key);
+    // Refresh settings to get updated values
     settings.value = await api.getSettings();
   } catch (e) {
-    console.error('Failed to save max_pairs');
+    console.error(`Failed to save ${key}`);
     alert('Failed to save setting');
   } finally {
     saving.value = false;
@@ -132,30 +220,83 @@ const saveMaxPairs = async () => {
           <div class="setting-row">
             <div class="setting-info">
               <span class="setting-label">Sampling Interval</span>
-              <span class="setting-desc">How often to fetch price data</span>
+              <span class="setting-desc">How often to fetch price data (5-300 seconds)</span>
             </div>
-            <div class="setting-value">
-              <span class="value-badge">{{ settings.sampling_interval || '30' }}s</span>
+            <div class="setting-value editable">
+              <template v-if="!editingSamplingInterval">
+                <span class="value-badge">{{ settings.sampling_interval || '30' }}s</span>
+                <button class="edit-btn" @click="startEditSamplingInterval">EDIT</button>
+              </template>
+              <template v-else>
+                <input
+                  type="number"
+                  v-model.number="samplingIntervalInput"
+                  class="edit-input"
+                  min="5"
+                  max="300"
+                />
+                <span class="input-unit">s</span>
+                <button class="save-btn" @click="saveSamplingInterval" :disabled="saving">
+                  {{ saving ? 'SAVING...' : 'SAVE' }}
+                </button>
+                <button class="cancel-btn" @click="cancelEditSamplingInterval">CANCEL</button>
+              </template>
             </div>
           </div>
           <div class="setting-row">
             <div class="setting-info">
               <span class="setting-label">Lookback Window</span>
-              <span class="setting-desc">Historical data window for analysis</span>
+              <span class="setting-desc">Historical data window for analysis (5-240 minutes)</span>
             </div>
-            <div class="setting-value">
-              <span class="value-badge">{{ settings.lookback_window || '30' }}m</span>
+            <div class="setting-value editable">
+              <template v-if="!editingLookbackWindow">
+                <span class="value-badge">{{ settings.lookback_window || '30' }}m</span>
+                <button class="edit-btn" @click="startEditLookbackWindow">EDIT</button>
+              </template>
+              <template v-else>
+                <input
+                  type="number"
+                  v-model.number="lookbackWindowInput"
+                  class="edit-input"
+                  min="5"
+                  max="240"
+                />
+                <span class="input-unit">m</span>
+                <button class="save-btn" @click="saveLookbackWindow" :disabled="saving">
+                  {{ saving ? 'SAVING...' : 'SAVE' }}
+                </button>
+                <button class="cancel-btn" @click="cancelEditLookbackWindow">CANCEL</button>
+              </template>
             </div>
           </div>
           <div class="setting-row">
             <div class="setting-info">
               <span class="setting-label">Lag Intervals</span>
-              <span class="setting-desc">Price lag calculation periods</span>
+              <span class="setting-desc">Price lag calculation periods (1-20)</span>
             </div>
-            <div class="setting-value">
-              <span class="value-badge">{{ settings.lag_intervals || '2' }}</span>
+            <div class="setting-value editable">
+              <template v-if="!editingLagIntervals">
+                <span class="value-badge">{{ settings.lag_intervals || '2' }}</span>
+                <button class="edit-btn" @click="startEditLagIntervals">EDIT</button>
+              </template>
+              <template v-else>
+                <input
+                  type="number"
+                  v-model.number="lagIntervalsInput"
+                  class="edit-input"
+                  min="1"
+                  max="20"
+                />
+                <button class="save-btn" @click="saveLagIntervals" :disabled="saving">
+                  {{ saving ? 'SAVING...' : 'SAVE' }}
+                </button>
+                <button class="cancel-btn" @click="cancelEditLagIntervals">CANCEL</button>
+              </template>
             </div>
           </div>
+        </div>
+        <div v-if="saveSuccess && ['sampling_interval', 'lookback_window', 'lag_intervals'].includes(saveSuccessKey)" class="save-success-message">
+          ✓ Data collection settings updated successfully
         </div>
       </div>
 
@@ -204,7 +345,7 @@ const saveMaxPairs = async () => {
             </div>
           </div>
         </div>
-        <div v-if="saveSuccess" class="save-success-message">
+        <div v-if="saveSuccess && saveSuccessKey === 'max_pairs'" class="save-success-message">
           ✓ Max pairs limit updated successfully
         </div>
       </div>
@@ -480,6 +621,13 @@ const saveMaxPairs = async () => {
 .edit-input:focus {
   outline: none;
   border-color: #003d7a;
+}
+
+.input-unit {
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 0.85em;
+  font-weight: 700;
+  color: #5a5a5a;
 }
 
 .save-btn {

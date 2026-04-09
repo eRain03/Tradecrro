@@ -50,7 +50,28 @@ interface Order {
   limitPrice: number;
 }
 
+interface DataSourceStatus {
+  name: string;
+  available: boolean;
+  lastError?: string;
+  lastErrorTime?: string;
+  pausedUntil?: string;
+  requestCount: number;
+  errorCount: number;
+}
+
+interface APIStatus {
+  currentSource: string;
+  primarySource: string;
+  usingFallback: boolean;
+  sources: {
+    tiger: DataSourceStatus;
+    yahoo: DataSourceStatus;
+  };
+}
+
 const status = ref<AutoTradingStatus | null>(null);
+const apiStatus = ref<APIStatus | null>(null);
 const positions = ref<Position[]>([]);
 const orders = ref<Order[]>([]);
 const history = ref<Trade[]>([]);
@@ -66,6 +87,15 @@ const fetchStatus = async () => {
     status.value = await res.json();
   } catch (e) {
     console.error('Failed to fetch status:', e);
+  }
+};
+
+const fetchAPIStatus = async () => {
+  try {
+    const res = await fetch('/api/auto-trading/api-status');
+    apiStatus.value = await res.json();
+  } catch (e) {
+    console.error('Failed to fetch API status:', e);
   }
 };
 
@@ -198,10 +228,12 @@ const getPnlClass = (pnl?: number) => {
 
 onMounted(() => {
   fetchStatus();
+  fetchAPIStatus();
   fetchHistory();
 
   refreshInterval = setInterval(() => {
     fetchStatus();
+    fetchAPIStatus();
     fetchHistory();
   }, 10000);
 });
@@ -284,6 +316,60 @@ onUnmounted(() => {
         >
           📉 Close All Positions
         </button>
+      </div>
+    </div>
+
+    <!-- API Status Card -->
+    <div class="card api-status-card">
+      <div class="card-header">
+        <h2>🔌 Data Source Status</h2>
+        <div class="status-badges">
+          <span class="badge" :class="apiStatus?.usingFallback ? 'warning' : 'success'">
+            {{ apiStatus?.currentSource?.toUpperCase() || 'UNKNOWN' }}
+          </span>
+          <span v-if="apiStatus?.usingFallback" class="badge warning">
+            ⚠️ Using Fallback
+          </span>
+        </div>
+      </div>
+
+      <div class="api-sources">
+        <div class="source-item" v-if="apiStatus?.sources?.tiger">
+          <div class="source-header">
+            <span class="source-name">🐯 Tiger API</span>
+            <span class="source-status" :class="apiStatus.sources.tiger.available ? 'available' : 'unavailable'">
+              {{ apiStatus.sources.tiger.available ? '✅ Available' : '❌ Unavailable' }}
+            </span>
+          </div>
+          <div class="source-details" v-if="apiStatus.sources.tiger">
+            <span>Requests: {{ apiStatus.sources.tiger.requestCount }}</span>
+            <span>Errors: {{ apiStatus.sources.tiger.errorCount }}</span>
+          </div>
+          <div class="source-error" v-if="apiStatus.sources.tiger.lastError">
+            <span class="error-label">Last Error:</span>
+            <span class="error-message">{{ apiStatus.sources.tiger.lastError }}</span>
+          </div>
+          <div class="source-paused" v-if="apiStatus.sources.tiger.pausedUntil">
+            <span>⏳ Paused until: {{ formatTime(apiStatus.sources.tiger.pausedUntil) }}</span>
+          </div>
+        </div>
+
+        <div class="source-item" v-if="apiStatus?.sources?.yahoo">
+          <div class="source-header">
+            <span class="source-name">📈 Yahoo Finance</span>
+            <span class="source-status" :class="apiStatus.sources.yahoo.available ? 'available' : 'unavailable'">
+              {{ apiStatus.sources.yahoo.available ? '✅ Available' : '❌ Unavailable' }}
+            </span>
+          </div>
+          <div class="source-details" v-if="apiStatus.sources.yahoo">
+            <span>Requests: {{ apiStatus.sources.yahoo.requestCount }}</span>
+            <span>Errors: {{ apiStatus.sources.yahoo.errorCount }}</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="failover-info" v-if="apiStatus?.usingFallback">
+        <p>⚠️ Currently using Yahoo Finance as fallback. System will automatically switch back to Tiger when it recovers.</p>
       </div>
     </div>
 
@@ -453,6 +539,100 @@ onUnmounted(() => {
 .badge.live {
   background: #f8d7da;
   color: #721c24;
+}
+
+.badge.success {
+  background: #e6f4ea;
+  color: #1a7f37;
+}
+
+.badge.warning {
+  background: #fff3cd;
+  color: #856404;
+}
+
+.api-status-card .api-sources {
+  padding: 20px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px;
+}
+
+.source-item {
+  padding: 16px;
+  background: #f8f9fa;
+  border-radius: 8px;
+  border: 1px solid #e9ecef;
+}
+
+.source-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.source-name {
+  font-weight: 600;
+  font-size: 1em;
+}
+
+.source-status {
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 0.75em;
+  font-weight: 600;
+}
+
+.source-status.available {
+  background: #e6f4ea;
+  color: #1a7f37;
+}
+
+.source-status.unavailable {
+  background: #f8d7da;
+  color: #721c24;
+}
+
+.source-details {
+  display: flex;
+  gap: 16px;
+  font-size: 0.85em;
+  color: #666;
+}
+
+.source-error {
+  margin-top: 12px;
+  padding: 8px 12px;
+  background: #fff5f5;
+  border-radius: 4px;
+  font-size: 0.85em;
+}
+
+.source-error .error-label {
+  color: #dc3545;
+  font-weight: 600;
+  margin-right: 8px;
+}
+
+.source-error .error-message {
+  color: #666;
+}
+
+.source-paused {
+  margin-top: 8px;
+  font-size: 0.85em;
+  color: #856404;
+}
+
+.failover-info {
+  padding: 12px 20px 20px;
+  color: #856404;
+  font-size: 0.9em;
+}
+
+.failover-info p {
+  margin: 0;
 }
 
 .status-content {

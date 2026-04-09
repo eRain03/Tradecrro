@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
-import config from './config';
+import config, { reloadSettings } from './config';
 import { runMigrations } from './database/migrations';
 import { seedData } from './database/seed';
 import UnifiedDataFetcher from './data/UnifiedDataFetcher';
@@ -51,6 +51,9 @@ app.use('/api/auto-trading', autoTradingRoutes);
 // Initialize database
 runMigrations();
 seedData();
+
+// Load settings from database (overrides env defaults)
+reloadSettings();
 
 // Initialize data fetcher and signal generator
 const dataFetcher = new UnifiedDataFetcher(config.dataSource.provider);

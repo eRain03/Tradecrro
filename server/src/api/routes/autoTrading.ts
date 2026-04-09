@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import TigerAutoTrader, { AutoTradeConfig } from '../../trading/TigerAutoTrader';
 import TigerTradeClient from '../../trading/TigerTradeClient';
+import apiOrchestrator from '../../data/APIOrchestrator';
 import config from '../../config';
 
 const router = Router();
@@ -28,6 +29,63 @@ function getTradeClient(): TigerTradeClient {
   }
   return tradeClient;
 }
+
+/**
+ * Get API orchestrator status (data source health)
+ */
+router.get('/api-status', (req, res) => {
+  try {
+    const status = apiOrchestrator.getStatus();
+    const currentSource = apiOrchestrator.getCurrentSource();
+    const usingFallback = apiOrchestrator.isUsingFallback();
+
+    res.json({
+      currentSource,
+      primarySource: config.dataSource.provider,
+      usingFallback,
+      sources: status,
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to get API status' });
+  }
+});
+
+/**
+ * Force switch data source
+ */
+router.post('/switch-source', (req, res) => {
+  try {
+    const { source } = req.body;
+
+    if (source === 'tiger' || source === 'yahoo') {
+      apiOrchestrator.forceSwitch(source);
+      res.json({
+        success: true,
+        currentSource: apiOrchestrator.getCurrentSource(),
+      });
+    } else {
+      res.status(400).json({ error: 'Invalid source. Use "tiger" or "yahoo"' });
+    }
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to switch source' });
+  }
+});
+
+/**
+ * Trigger recovery check
+ */
+router.post('/check-recovery', async (req, res) => {
+  try {
+    const recovered = await apiOrchestrator.checkRecovery();
+    res.json({
+      success: true,
+      recovered,
+      currentSource: apiOrchestrator.getCurrentSource(),
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to check recovery' });
+  }
+});
 
 /**
  * Get auto trading status

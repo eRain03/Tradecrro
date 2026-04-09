@@ -108,6 +108,7 @@ const getRangeBody = () => {
     startTime: startDatetime,
     endTime: endDatetime,
     pairs: selectedPairs.value.length > 0 ? selectedPairs.value : undefined,
+    concurrency: backtestConcurrency.value,
   };
 };
 
@@ -168,7 +169,7 @@ const fetchDbPage = async (page: number) => {
 };
 
 type ReplayStreamMsg =
-  | { type: 'start'; totalPairs: number; startTime: string; endTime: string }
+  | { type: 'start'; totalPairs: number; startTime: string; endTime: string; concurrency?: number; optimized?: boolean }
   | { type: 'heartbeat'; timestamp: string }
   | {
       type: 'progress';
@@ -185,6 +186,8 @@ type ReplayStreamMsg =
       percentApprox: number;
       lastPairSignalCount?: number;
       error?: string;
+      prefetchCompleted?: number;
+      prefetchTotal?: number;
     }
   | { type: 'signals'; pairIndex: number; stockA: string; stockB: string; signals: BacktestResult['signals']; cumulativeSignals: number }
   | { type: 'complete'; result: BacktestResult }
@@ -200,7 +203,13 @@ const replayProgress = ref<{
   percentApprox: number;
   step: string;
   detail: string;
+  concurrency?: number;
+  prefetchCompleted?: number;
+  prefetchTotal?: number;
 } | null>(null);
+
+// Concurrency setting for optimized backtest
+const backtestConcurrency = ref(5);
 
 // Stream signals for real-time display
 const streamSignals = ref<BacktestResult['signals']>([]);
@@ -247,21 +256,22 @@ const fetchReplay = async () => {
   const applyProgress = (msg: Extract<ReplayStreamMsg, { type: 'progress' }>) => {
     const pair = `${msg.stockA} / ${msg.stockB}`;
     let detail = '';
-    if (msg.step === 'pair_start') {
+    if (msg.step === 'prefetch') {
+      const completed = msg.prefetchCompleted ?? 0;
+      const total = msg.prefetchTotal ?? 0;
+      const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
+      detail = `Prefetching symbols (${completed}/${total}, ${pct}%) - warming cache for faster processing…`;
+    } else if (msg.step === 'pair_start' || msg.step === 'symbol_start') {
       detail =
         'Starting this pair: will fetch K-lines for both symbols (Databento single request may take 1-5 minutes, check terminal [Databento] logs)';
-    } else if (msg.step === 'symbol') {
-      if (msg.subStep === 'symbol_start') {
-        detail = `Requesting Databento: ${msg.symbol ?? ''} (Python subprocess)…`;
-      } else if (msg.subStep === 'symbol_done') {
-        detail = `${msg.symbol ?? ''} returned ${msg.barCount ?? 0} 1m K-lines`;
-      } else if (msg.subStep === 'compute') {
-        detail = 'Computing correlation, volume scores and signals…';
-      } else {
-        detail = 'Processing…';
-      }
+    } else if (msg.step === 'symbol_done') {
+      detail = `${msg.symbol ?? ''} returned ${msg.barCount ?? 0} 1m K-lines`;
+    } else if (msg.step === 'compute') {
+      detail = 'Computing correlation, volume scores and signals…';
     } else if (msg.step === 'pair_done') {
       detail = `Pair completed, generated ${msg.lastPairSignalCount ?? 0} timestamp signals`;
+    } else if (msg.step === 'heartbeat') {
+      detail = `Waiting for data... (${msg.elapsedSec}s elapsed)`;
     } else {
       detail = 'Processing…';
     }
@@ -275,6 +285,8 @@ const fetchReplay = async () => {
       percentApprox: msg.percentApprox,
       step: msg.step,
       detail,
+      prefetchCompleted: msg.prefetchCompleted,
+      prefetchTotal: msg.prefetchTotal,
     };
   };
 
@@ -296,8 +308,13 @@ const fetchReplay = async () => {
           lastPairSignalCount: 0,
           elapsedSec: 0,
           percentApprox: 0,
-          step: 'start',
-          detail: `Total ${msg.totalPairs} pairs, starting backtest one by one…`,
+          step: msg.optimized ? 'prefetch' : 'start',
+          detail: msg.optimized
+            ? `Total ${msg.totalPairs} pairs · Concurrency: ${msg.concurrency ?? 1}x · Optimized mode with prefetch`
+            : `Total ${msg.totalPairs} pairs, starting backtest…`,
+          concurrency: msg.concurrency,
+          prefetchCompleted: 0,
+          prefetchTotal: 0,
         };
       } else if (msg.type === 'progress') {
         applyProgress(msg);
@@ -471,6 +488,11 @@ interface BacktestResult {
     total: number;
     totalPages: number;
   };
+  performance?: {
+    elapsedSec: number;
+    concurrency: number;
+    prefetched: boolean;
+  };
   signals: Array<{
     id: number;
     timestamp: string;
@@ -558,6 +580,26 @@ interface BacktestResult {
         <p v-if="backtestMode === 'replay'" class="databento-notice">
           ⚠️ Databento DBEQ.BASIC has ~1 day delay. Today's intraday data may not be available yet.
         </p>
+
+        <!-- Concurrency setting for replay mode -->
+        <div v-if="backtestMode === 'replay'" class="concurrency-section">
+          <label class="concurrency-label">
+            Concurrency: <strong>{{ backtestConcurrency }}</strong> parallel requests
+          </label>
+          <input
+            type="range"
+            min="1"
+            max="10"
+            step="1"
+            v-model.number="backtestConcurrency"
+            class="concurrency-slider"
+          />
+          <div class="concurrency-hints">
+            <span>1 (slowest)</span>
+            <span>5 (recommended)</span>
+            <span>10 (fastest)</span>
+          </div>
+        </div>
       </div>
 
       <div class="form-actions">
@@ -580,22 +622,42 @@ interface BacktestResult {
         <div class="replay-progress-top">
           <span class="loading-spinner">⏳</span>
           <span class="replay-title">Market Replay Backtest</span>
-        </div>
-        <div class="progress-track" role="progressbar" :aria-valuenow="replayProgress.percentApprox" aria-valuemin="0" aria-valuemax="100">
-          <div class="progress-fill" :style="{ width: `${replayProgress.percentApprox}%` }" />
-        </div>
-        <p class="replay-percent">{{ replayProgress.percentApprox }}%</p>
-        <p class="replay-main">
-          Pair <strong>{{ replayProgress.current }}</strong> / {{ replayProgress.totalPairs }}
-          <span v-if="replayProgress.pairLabel" class="replay-pair"> · {{ replayProgress.pairLabel }}</span>
-        </p>
-        <p class="replay-stats">
-          Total signals: <strong>{{ replayProgress.cumulativeSignals }}</strong>
-          <span v-if="replayProgress.step === 'pair_done' && replayProgress.lastPairSignalCount">
-            · This pair +{{ replayProgress.lastPairSignalCount }}
+          <span v-if="replayProgress.concurrency" class="replay-concurrency-badge">
+            {{ replayProgress.concurrency }}x concurrency
           </span>
-          · Elapsed: <strong>{{ replayProgress.elapsedSec }}</strong>s
-        </p>
+        </div>
+
+        <!-- Prefetch progress (shown during prefetch phase) -->
+        <div v-if="replayProgress.step === 'prefetch' && replayProgress.prefetchTotal" class="prefetch-progress">
+          <p class="prefetch-label">🚀 Prefetching symbols (warming cache)</p>
+          <div class="progress-track prefetch-track" role="progressbar">
+            <div class="progress-fill prefetch-fill" :style="{ width: `${Math.round((replayProgress.prefetchCompleted ?? 0) / replayProgress.prefetchTotal * 100)}%` }" />
+          </div>
+          <p class="prefetch-stats">
+            <strong>{{ replayProgress.prefetchCompleted ?? 0 }}</strong> / {{ replayProgress.prefetchTotal }} symbols
+            · {{ Math.round((replayProgress.prefetchCompleted ?? 0) / replayProgress.prefetchTotal * 100) }}%
+            · {{ replayProgress.elapsedSec }}s elapsed
+          </p>
+        </div>
+
+        <!-- Normal pair processing progress -->
+        <div v-else>
+          <div class="progress-track" role="progressbar" :aria-valuenow="replayProgress.percentApprox" aria-valuemin="0" aria-valuemax="100">
+            <div class="progress-fill" :style="{ width: `${replayProgress.percentApprox}%` }" />
+          </div>
+          <p class="replay-percent">{{ replayProgress.percentApprox }}%</p>
+          <p class="replay-main">
+            Pair <strong>{{ replayProgress.current }}</strong> / {{ replayProgress.totalPairs }}
+            <span v-if="replayProgress.pairLabel" class="replay-pair"> · {{ replayProgress.pairLabel }}</span>
+          </p>
+          <p class="replay-stats">
+            Total signals: <strong>{{ replayProgress.cumulativeSignals }}</strong>
+            <span v-if="replayProgress.step === 'pair_done' && replayProgress.lastPairSignalCount">
+              · This pair +{{ replayProgress.lastPairSignalCount }}
+            </span>
+            · Elapsed: <strong>{{ replayProgress.elapsedSec }}</strong>s
+          </p>
+        </div>
         <p class="loading-sub replay-detail">{{ replayProgress.detail }}</p>
 
         <!-- Streaming Signals Preview -->
@@ -680,6 +742,16 @@ interface BacktestResult {
           <div class="summary-label">Avg Total Score</div>
           <div class="summary-value">{{ backtestResult.summary.avgTotalScore.toFixed(1) }}</div>
           <div class="summary-sub">Average of all signals</div>
+        </div>
+
+        <!-- Performance metrics (replay mode only) -->
+        <div v-if="backtestResult.performance" class="summary-card performance-card">
+          <div class="summary-label">Performance</div>
+          <div class="summary-value">{{ backtestResult.performance.elapsedSec }}s</div>
+          <div class="summary-sub">
+            Concurrency: {{ backtestResult.performance.concurrency }}
+            <span v-if="backtestResult.performance.prefetched">· Prefetched</span>
+          </div>
         </div>
       </div>
 
@@ -1060,6 +1132,59 @@ export default {
   color: #92400e;
 }
 
+.concurrency-section {
+  margin-top: 16px;
+  padding: 12px 16px;
+  background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
+  border: 1px solid #bae6fd;
+  border-radius: 6px;
+}
+
+.concurrency-label {
+  display: block;
+  font-size: 0.85em;
+  color: #0c4a6e;
+  margin-bottom: 8px;
+}
+
+.concurrency-slider {
+  width: 100%;
+  height: 6px;
+  border-radius: 3px;
+  background: #e0f2fe;
+  outline: none;
+  cursor: pointer;
+  accent-color: #c41e3a;
+}
+
+.concurrency-slider::-webkit-slider-thumb {
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #c41e3a;
+  cursor: pointer;
+  box-shadow: 0 2px 4px rgba(196, 30, 58, 0.3);
+}
+
+.concurrency-slider::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #c41e3a;
+  cursor: pointer;
+  border: none;
+  box-shadow: 0 2px 4px rgba(196, 30, 58, 0.3);
+}
+
+.concurrency-hints {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 6px;
+  font-size: 0.75em;
+  color: #0369a1;
+}
+
 .list-hint {
   font-weight: 400;
   color: #8b8b8b;
@@ -1228,6 +1353,45 @@ export default {
   color: #1a1a1a;
   font-size: 0.98em;
   text-transform: uppercase;
+}
+
+.replay-concurrency-badge {
+  padding: 4px 10px;
+  background: linear-gradient(135deg, #0ea5e9 0%, #0369a1 100%);
+  color: #fff;
+  font-size: 0.75em;
+  font-weight: 600;
+  border-radius: 4px;
+  letter-spacing: 0.5px;
+}
+
+.prefetch-progress {
+  margin: 16px auto;
+  max-width: 480px;
+}
+
+.prefetch-label {
+  font-size: 0.85em;
+  color: #0c4a6e;
+  margin-bottom: 12px;
+  text-align: center;
+}
+
+.prefetch-track {
+  background: linear-gradient(to right, #e0f2fe, #bae6fd);
+  border-color: #7dd3fc;
+}
+
+.prefetch-fill {
+  background: linear-gradient(90deg, #0ea5e9 0%, #38bdf8 60%, #7dd3fc 100%);
+}
+
+.prefetch-stats {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.85em;
+  color: #0369a1;
+  text-align: center;
+  margin-top: 8px;
 }
 
 .progress-track {
@@ -1513,6 +1677,19 @@ export default {
 
 .summary-card.highlight::before {
   background: linear-gradient(90deg, #c41e3a 0%, #e85a6f 50%, #c41e3a 100%);
+}
+
+.summary-card.performance-card {
+  border-color: rgba(14, 165, 233, 0.3);
+  background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
+}
+
+.summary-card.performance-card::before {
+  background: linear-gradient(90deg, #0ea5e9 0%, #38bdf8 50%, #0ea5e9 100%);
+}
+
+.summary-card.performance-card .summary-value {
+  color: #0369a1;
 }
 
 .summary-label {

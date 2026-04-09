@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { getDatabase } from '../../database/connection';
 import { AIPairMiner } from '../../core/ai/AIPairMiner';
+import config, { reloadSettings } from '../../config';
 
 const router = Router();
 
@@ -33,6 +34,9 @@ router.post('/', (req, res) => {
       INSERT OR REPLACE INTO settings (key, value, updated_at)
       VALUES (?, ?, CURRENT_TIMESTAMP)
     `).run(key, value);
+
+    // Update config object immediately
+    reloadSettings();
 
     // If updating max_pairs, also update the miner instance
     if (key === 'max_pairs') {

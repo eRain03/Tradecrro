@@ -97,12 +97,14 @@ export class AIPairMiner {
       }
     }
 
-    // Set to market hours (9:30 AM - 4:00 PM ET, but we use UTC)
-    // Databento uses UTC timestamps
-    const start = new Date(targetDate);
-    start.setHours(4, 0, 0, 0); // 4:00 AM UTC (pre-market)
-    const end = new Date(targetDate);
-    end.setHours(20, 0, 0, 0); // 8:00 PM UTC (after market close)
+    // Set to market hours in UTC
+    // US Market: 9:30 AM - 4:00 PM ET = 14:30 - 21:00 UTC
+    const year = targetDate.getFullYear();
+    const month = targetDate.getMonth();
+    const day = targetDate.getDate();
+
+    const start = new Date(Date.UTC(year, month, day, 14, 30, 0)); // 14:30 UTC = 9:30 AM ET
+    const end = new Date(Date.UTC(year, month, day, 21, 0, 0)); // 21:00 UTC = 4:00 PM ET
 
     return { start, end };
   }
@@ -326,11 +328,11 @@ export class AIPairMiner {
     } catch (err: any) {
       console.error('[AIPairMiner] 挖掘周期发生错误:', err.message);
     } finally {
-      // Schedule next run in 1 minute to avoid API concurrency but keep it very fast
+      // Schedule next run in 30 seconds
       if (this.isRunning) {
         this.timer = setTimeout(() => {
           this.runMinerCycle();
-        }, 60 * 1000);
+        }, 30 * 1000);
       }
     }
   }

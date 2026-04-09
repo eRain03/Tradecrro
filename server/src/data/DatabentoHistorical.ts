@@ -9,6 +9,8 @@ const execFileAsync = promisify(execFile);
 /**
  * Historical OHLCV via Databento (official Python client).
  * Used for backtest replay only; does not affect live polling.
+ *
+ * OPTIMIZED: Supports concurrent batch fetching for faster backtests
  */
 export class DatabentoHistorical {
   private pythonBin: string;
@@ -17,10 +19,15 @@ export class DatabentoHistorical {
   private cache = new Map<string, HistoricalData[]>();
   private heartbeatInterval: NodeJS.Timeout | null = null;
 
-  constructor() {
+  // Concurrency control
+  private activeRequests = 0;
+  private readonly maxConcurrency: number;
+
+  constructor(maxConcurrency: number = 5) {
     this.pythonBin = config.databento.python;
     this.dataset = config.databento.dataset;
     this.scriptPath = path.join(__dirname, '../../scripts/databento_ohlcv.py');
+    this.maxConcurrency = maxConcurrency;
   }
 
   /**
@@ -41,6 +48,21 @@ export class DatabentoHistorical {
   }
 
   /**
+   * Get current cache size (for debugging)
+   */
+  getCacheSize(): number {
+    return this.cache.size;
+  }
+
+  /**
+   * Check cache for a symbol
+   */
+  hasCache(symbol: string, startTime: Date, endTime: Date): boolean {
+    const cacheKey = `${symbol}:${startTime.getTime()}:${endTime.getTime()}`;
+    return this.cache.has(cacheKey);
+  }
+
+  /**
    * 1m bars aligned with SignalBacktester (interval string ignored; always ohlcv-1m).
    * @param onHeartbeat - Optional callback to keep connection alive during long fetch
    */
@@ -55,13 +77,13 @@ export class DatabentoHistorical {
     const cacheKey = `${raw}:${startTime.getTime()}:${endTime.getTime()}`;
 
     if (this.cache.has(cacheKey)) {
-      console.log(`[Databento] 命中缓存: ${raw}`);
+      console.log(`[Databento] Cache hit: ${raw}`);
       return this.cache.get(cacheKey)!;
     }
 
     if (raw.includes('/')) {
       throw new Error(
-        'Databento 回测当前仅支持美股 raw 代码（如 AAPL），不支持外汇对写法（如 EUR/USD）。'
+        'Databento backtest only supports US stock raw codes (e.g. AAPL), not forex pairs (e.g. EUR/USD).'
       );
     }
 
@@ -74,14 +96,14 @@ export class DatabentoHistorical {
       PYTHONUNBUFFERED: '1',
     };
 
-    console.log(`[Databento] 拉取 K 线 ${raw} ${startIso} → ${endIso} dataset=${this.dataset}`);
+    console.log(`[Databento] Fetching ${raw} ${startIso} → ${endIso} dataset=${this.dataset}`);
 
     // Start heartbeat to keep connection alive during long fetch
     if (onHeartbeat) {
       this.heartbeatInterval = setInterval(() => {
-        console.log(`[Databento] 心跳: ${raw} 正在等待数据...`);
+        console.log(`[Databento] Heartbeat: ${raw} waiting for data...`);
         onHeartbeat();
-      }, 5000); // Every 5 seconds
+      }, 5000);
     }
 
     let stdout: string;
@@ -101,12 +123,10 @@ export class DatabentoHistorical {
       if (e.stderr) {
         console.error(`[Databento] ${raw} stderr:`, e.stderr);
       }
-      // Stop heartbeat on error
       this.stopHeartbeat();
       throw err;
     }
 
-    // Stop heartbeat after fetch completes
     this.stopHeartbeat();
 
     let rows: Array<{
@@ -121,14 +141,14 @@ export class DatabentoHistorical {
     try {
       rows = JSON.parse(stdout) as typeof rows;
     } catch {
-      throw new Error(`Databento 输出解析失败: ${stdout.slice(0, 200)}`);
+      throw new Error(`Databento parse failed: ${stdout.slice(0, 200)}`);
     }
 
     if (!Array.isArray(rows)) {
-      throw new Error('Databento 返回格式无效（期望 JSON 数组）');
+      throw new Error('Databento returned invalid format (expected JSON array)');
     }
 
-    console.log(`[Databento] ${raw} 解析完成，共 ${rows.length} 根 K 线`);
+    console.log(`[Databento] ${raw} parsed, ${rows.length} bars`);
 
     const resultData = rows.map((r) => ({
       date: new Date(r.date),
@@ -143,7 +163,71 @@ export class DatabentoHistorical {
     return resultData;
   }
 
+  /**
+   * Batch fetch multiple symbols concurrently
+   * Much faster than sequential fetching for backtests
+   */
+  async getHistoricalRangeBatch(
+    symbols: string[],
+    startTime: Date,
+    endTime: Date,
+    _interval: string = '1m',
+    onProgress?: (completed: number, total: number, symbol: string) => void
+  ): Promise<Map<string, HistoricalData[]>> {
+    const results = new Map<string, HistoricalData[]>();
+    let completed = 0;
+
+    // Process in batches with concurrency control
+    const processSymbol = async (symbol: string): Promise<void> => {
+      // Wait if we've reached max concurrency
+      while (this.activeRequests >= this.maxConcurrency) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+
+      this.activeRequests++;
+
+      try {
+        const data = await this.getHistoricalRange(symbol, startTime, endTime, _interval);
+        results.set(symbol, data);
+        completed++;
+        onProgress?.(completed, symbols.length, symbol);
+      } catch (error: any) {
+        console.error(`[Databento] Failed to fetch ${symbol}:`, error.message);
+        results.set(symbol, []);
+        completed++;
+        onProgress?.(completed, symbols.length, symbol);
+      } finally {
+        this.activeRequests--;
+      }
+    };
+
+    // Start all requests (they will self-regulate via activeRequests counter)
+    await Promise.all(symbols.map(processSymbol));
+
+    return results;
+  }
+
+  /**
+   * Prefetch symbols for faster backtest (warm up cache)
+   */
+  async prefetchSymbols(
+    symbols: string[],
+    startTime: Date,
+    endTime: Date,
+    onProgress?: (completed: number, total: number, symbol: string) => void
+  ): Promise<void> {
+    console.log(`[Databento] Prefetching ${symbols.length} symbols with concurrency=${this.maxConcurrency}...`);
+    const t0 = Date.now();
+
+    await this.getHistoricalRangeBatch(symbols, startTime, endTime, '1m', onProgress);
+
+    const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+    console.log(`[Databento] Prefetch complete in ${elapsed}s for ${symbols.length} symbols`);
+  }
+
   private fin(v: number): number {
     return typeof v === 'number' && Number.isFinite(v) ? v : 0;
   }
 }
+
+export default DatabentoHistorical;

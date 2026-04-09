@@ -1,5 +1,6 @@
 import dotenv from 'dotenv';
 import path from 'path';
+import { getDatabase } from '../database/connection';
 
 dotenv.config({ path: path.resolve(__dirname, '../../.env') });
 
@@ -44,7 +45,8 @@ interface Config {
   };
 }
 
-export const config: Config = {
+// Default config from environment variables
+const defaultConfig: Config = {
   dataSource: {
     provider: (process.env.DATA_SOURCE as 'yahoo' | 'tiger' | 'simulated') || 'yahoo',
   },
@@ -77,10 +79,74 @@ export const config: Config = {
   },
   autoTrading: {
     enabled: process.env.AUTO_TRADING_ENABLED === 'true',
-    dryRun: process.env.AUTO_TRADING_DRY_RUN !== 'false', // Default true for safety
+    dryRun: process.env.AUTO_TRADING_DRY_RUN !== 'false',
     maxPositionSize: parseInt(process.env.MAX_POSITION_SIZE || '100', 10),
     maxPositionValue: parseInt(process.env.MAX_POSITION_VALUE || '10000', 10),
   },
 };
+
+/**
+ * Load settings from database and override default config
+ */
+function loadSettingsFromDatabase(): void {
+  try {
+    const db = getDatabase();
+
+    // Check if settings table exists
+    const tableExists = db.prepare(`
+      SELECT name FROM sqlite_master WHERE type='table' AND name='settings'
+    `).get();
+
+    if (!tableExists) {
+      return;
+    }
+
+    // Load all settings
+    const rows = db.prepare('SELECT key, value FROM settings').all() as { key: string; value: string }[];
+
+    for (const row of rows) {
+      switch (row.key) {
+        case 'max_pairs':
+          config.trading.maxPairs = parseInt(row.value, 10) || config.trading.maxPairs;
+          console.log(`📊 Loaded max_pairs from database: ${config.trading.maxPairs}`);
+          break;
+        case 'score_threshold':
+          config.trading.scoreThreshold = parseInt(row.value, 10) || config.trading.scoreThreshold;
+          console.log(`📊 Loaded score_threshold from database: ${config.trading.scoreThreshold}`);
+          break;
+        case 'take_profit_pct':
+          config.trading.takeProfitPct = parseInt(row.value, 10) || config.trading.takeProfitPct;
+          console.log(`📊 Loaded take_profit_pct from database: ${config.trading.takeProfitPct}`);
+          break;
+        case 'stop_loss_pct':
+          config.trading.stopLossPct = parseInt(row.value, 10) || config.trading.stopLossPct;
+          console.log(`📊 Loaded stop_loss_pct from database: ${config.trading.stopLossPct}`);
+          break;
+        case 'sampling_interval':
+          config.trading.samplingInterval = parseInt(row.value, 10) || config.trading.samplingInterval;
+          console.log(`📊 Loaded sampling_interval from database: ${config.trading.samplingInterval}`);
+          break;
+        case 'lookback_window':
+          config.trading.lookbackWindow = parseInt(row.value, 10) || config.trading.lookbackWindow;
+          console.log(`📊 Loaded lookback_window from database: ${config.trading.lookbackWindow}`);
+          break;
+        case 'lag_intervals':
+          config.trading.lagIntervals = parseInt(row.value, 10) || config.trading.lagIntervals;
+          console.log(`📊 Loaded lag_intervals from database: ${config.trading.lagIntervals}`);
+          break;
+      }
+    }
+  } catch (error) {
+    console.warn('Failed to load settings from database, using defaults');
+  }
+}
+
+// Create config object (mutable for database override)
+export const config: Config = { ...defaultConfig };
+
+// Export function to reload settings from database
+export function reloadSettings(): void {
+  loadSettingsFromDatabase();
+}
 
 export default config;
