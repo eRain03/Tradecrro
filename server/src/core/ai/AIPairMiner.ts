@@ -231,7 +231,7 @@ export class AIPairMiner {
   }
 
   /**
-   * Clean up pairs with low liquidity (daily traded value < $10M)
+   * Clean up pairs with low liquidity (daily traded value < $3M)
    * Uses Databento historical data from recent trading days
    */
   public async cleanupLowLiquidityPairs(): Promise<number> {
@@ -242,7 +242,7 @@ export class AIPairMiner {
 
     console.log(`[AIPairMiner] 检查 ${pairs.length} 个活跃交易对的流动性 (使用 Databento 历史数据)...`);
     let deactivatedCount = 0;
-    const MIN_VALUE = 10_000_000;
+    const MIN_VALUE = 3_000_000;
 
     for (const pair of pairs) {
       try {
@@ -254,7 +254,7 @@ export class AIPairMiner {
           deactivatedCount++;
           console.log(
             `[AIPairMiner] 停用低流动性交易对 ${pair.stock_a}/${pair.stock_b}: ` +
-            `${pair.stock_a} $${valueA ? (valueA/1000000).toFixed(1) : 'N/A'}M < $10M`
+            `${pair.stock_a} $${valueA ? (valueA/1000000).toFixed(1) : 'N/A'}M < $3M`
           );
           continue;
         }
@@ -264,7 +264,7 @@ export class AIPairMiner {
           deactivatedCount++;
           console.log(
             `[AIPairMiner] 停用低流动性交易对 ${pair.stock_a}/${pair.stock_b}: ` +
-            `${pair.stock_b} $${valueB ? (valueB/1000000).toFixed(1) : 'N/A'}M < $10M`
+            `${pair.stock_b} $${valueB ? (valueB/1000000).toFixed(1) : 'N/A'}M < $3M`
           );
         }
       } catch (err: any) {
@@ -405,19 +405,19 @@ export class AIPairMiner {
   }
 
   private async verifyLiquidity(stockA: string, stockB: string): Promise<boolean> {
-    const MIN_VALUE = 10_000_000;
+    const MIN_VALUE = 3_000_000;
 
     try {
       const valueA = await this.getDailyTradedValue(stockA);
       const valueB = await this.getDailyTradedValue(stockB);
 
       if (valueA === null || valueA < MIN_VALUE) {
-        console.log(`[AIPairMiner] 剔除对子 ${stockA}/${stockB}: ${stockA} 流动性不足 ($${valueA ? (valueA/1000000).toFixed(1) : 'N/A'}M < $10M)`);
+        console.log(`[AIPairMiner] 剔除对子 ${stockA}/${stockB}: ${stockA} 流动性不足 ($${valueA ? (valueA/1000000).toFixed(1) : 'N/A'}M < $3M)`);
         return false;
       }
 
       if (valueB === null || valueB < MIN_VALUE) {
-        console.log(`[AIPairMiner] 剔除对子 ${stockA}/${stockB}: ${stockB} 流动性不足 ($${valueB ? (valueB/1000000).toFixed(1) : 'N/A'}M < $10M)`);
+        console.log(`[AIPairMiner] 剔除对子 ${stockA}/${stockB}: ${stockB} 流动性不足 ($${valueB ? (valueB/1000000).toFixed(1) : 'N/A'}M < $3M)`);
         return false;
       }
 
